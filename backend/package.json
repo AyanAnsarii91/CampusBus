@@ -8,7 +8,8 @@
     "start": "node server.js",
     "seed": "node seed.js",
     "add:route-07": "node add-route-07.js",
-    "admin:create": "node create-admin.js"
+    "admin:create": "node create-admin.js",
+    "admin:reset-password": "node reset-admin-password.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
