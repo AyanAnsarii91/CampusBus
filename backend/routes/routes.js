@@ -1,0 +1,11 @@
+import { Router } from "express";
+import * as c from "../controllers/routes.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
+const r = Router();
+r.use(requireAuth);
+r.get("/", c.list);
+r.get("/:id", c.get);
+r.post("/", requireRole("admin"), c.create);
+r.put("/:id", requireRole("admin"), c.update);
+r.delete("/:id", requireRole("admin"), c.remove);
+export default r;

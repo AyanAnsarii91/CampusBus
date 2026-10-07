@@ -1,0 +1,10 @@
+import { Router } from "express";
+import * as c from "../controllers/trips.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
+const r = Router();
+r.use(requireAuth);
+r.post("/start", requireRole("driver"), c.start);
+r.post("/stop", requireRole("driver"), c.stop);
+r.get("/active", c.active);
+r.get("/:id", c.get);
+export default r;
