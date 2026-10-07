@@ -80,12 +80,23 @@ npm install
 npm run dev
 ```
 
-Optional frontend environment variables:
+For local development, copy `frontend/.env.example` to `frontend/.env`. The frontend also automatically defaults to the localhost backend on localhost and the Render backend on deployed hosts.
+
+Frontend environment variables:
 
 ```env
 VITE_API_URL=http://localhost:5000/api
 VITE_SOCKET_URL=http://localhost:5000
 ```
+
+For the Render frontend service, set these build-time environment variables in Render and redeploy:
+
+```env
+VITE_API_URL=https://campusbus-1czm.onrender.com/api
+VITE_SOCKET_URL=https://campusbus-1czm.onrender.com
+```
+
+For the Render backend service, set `CLIENT_URL`, `CORS_ORIGINS`, and `SOCKET_IO_ORIGINS` to include the production frontend and local development origins. Set `MONGO_URI` and `JWT_SECRET` directly in Render's environment settings; never put real values in `.env.example` or commit a `.env` file. `backend/.env.example` contains safe local placeholders and documents the allowed origins.
 
 ## Demo accounts (after seed)
 

@@ -18,14 +18,40 @@ import { setupSockets } from "./sockets/index.js";
 import { notFound, errorHandler } from "./middleware/error.js";
 const app = express();
 const server = http.createServer(app);
-const allowed = (process.env.CLIENT_URL || "http://localhost:5173")
-  .split(",")
-  .map((x) => x.trim());
-const io = new Server(server, { cors: { origin: allowed, credentials: true } });
+const defaultOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://prashanticampusbus.onrender.com",
+];
+const parseOrigins = (...values) =>
+  values
+    .filter(Boolean)
+    .flatMap((value) => value.split(","))
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+const allowedOrigins = [
+  ...new Set([
+    ...defaultOrigins,
+    ...parseOrigins(process.env.CLIENT_URL, process.env.CORS_ORIGINS),
+  ]),
+];
+const socketOrigins = [
+  ...new Set([
+    ...defaultOrigins,
+    ...parseOrigins(
+      process.env.CLIENT_URL,
+      process.env.CORS_ORIGINS,
+      process.env.SOCKET_IO_ORIGINS,
+    ),
+  ]),
+];
+const io = new Server(server, {
+  cors: { origin: socketOrigins, credentials: true },
+});
 app.set("io", io);
 app.set("trust proxy", 1);
 app.use(helmet());
-app.use(cors({ origin: allowed, credentials: true }));
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(compression());
 app.use(express.json({ limit: "100kb" }));
 app.use(

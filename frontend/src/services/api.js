@@ -1,9 +1,20 @@
 import axios from "axios";
 
-export const API_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-export const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
+const LOCAL_BACKEND_URL = "http://localhost:5000";
+const PRODUCTION_BACKEND_URL = "https://campusbus-1czm.onrender.com";
+const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+const defaultBackendUrl =
+  typeof window !== "undefined" && localHosts.has(window.location.hostname)
+    ? LOCAL_BACKEND_URL
+    : PRODUCTION_BACKEND_URL;
+const withoutTrailingSlash = (url) => url.replace(/\/+$/, "");
+
+export const API_URL = withoutTrailingSlash(
+  import.meta.env.VITE_API_URL || `${defaultBackendUrl}/api`,
+);
+export const SOCKET_URL = withoutTrailingSlash(
+  import.meta.env.VITE_SOCKET_URL || defaultBackendUrl,
+);
 
 const api = axios.create({ baseURL: API_URL, timeout: 10000 });
 api.interceptors.request.use((config) => {

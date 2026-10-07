@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import Layout from "../components/Layout";
-import { SOCKET_URL, busApi, routeApi } from "../services/api";
+import { API_URL, SOCKET_URL, busApi, routeApi } from "../services/api";
 import { Play, Pause, Square, Gauge } from "lucide-react";
 import MapView from "../components/MapView";
 export default function Simulator() {
@@ -32,7 +32,7 @@ export default function Simulator() {
     route = routes.find((r) => r._id === bus?.routeId);
   const start = async () => {
     const r = await fetch(
-      `${import.meta.env.VITE_API_URL || "http://localhost:5000/api"}/simulator/start`,
+      `${API_URL}/simulator/start`,
       {
         method: "POST",
         headers: {
@@ -91,7 +91,7 @@ export default function Simulator() {
     clearInterval(timer.current);
     if (trip.current)
       await fetch(
-        `${import.meta.env.VITE_API_URL || "http://localhost:5000/api"}/simulator/stop`,
+        `${API_URL}/simulator/stop`,
         {
           method: "POST",
           headers: {
