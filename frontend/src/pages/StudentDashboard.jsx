@@ -23,6 +23,18 @@ const fmtTime = (d) =>
     ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "—";
 
+const hasStopCoordinates = (stops) =>
+  stops.length > 0 &&
+  stops.every(
+    (stop) =>
+      Number.isFinite(stop.latitude) &&
+      stop.latitude >= -90 &&
+      stop.latitude <= 90 &&
+      Number.isFinite(stop.longitude) &&
+      stop.longitude >= -180 &&
+      stop.longitude <= 180,
+  );
+
 function findRouteProgress(stops, location) {
   if (
     !location ||
@@ -40,7 +52,6 @@ function findRouteProgress(stops, location) {
   ) {
     return null;
   }
-
   const latitudeScale = Math.cos((location.latitude * Math.PI) / 180);
   const point = {
     x: location.longitude * latitudeScale,
@@ -125,14 +136,36 @@ export default function StudentDashboard() {
         index,
         scheduledOnly: true,
       }));
-  const gpsProgress = findRouteProgress(routeStops, data);
+  const routeCoordinatesAvailable = hasStopCoordinates(routeStops);
+  const stopLocationUnavailable =
+    stops.length > 0 &&
+    (!routeCoordinatesAvailable || data?.stopLocationAvailable === false);
+  const gpsProgress = routeCoordinatesAvailable
+    ? Number.isFinite(data?.routeProgress)
+      ? data.routeProgress
+      : findRouteProgress(routeStops, data)
+    : null;
+  const currentStop = data?.currentStop || null;
+  const nearestStop = data?.nearestStop || null;
+  const isStopped = data?.status === "stopped" || bus?.status === "stopped";
+  const currentStopIndex = currentStop
+    ? stops.findIndex((stop) => String(stop._id) === String(currentStop._id))
+    : -1;
+  const reportedNextStopIndex = data?.nextStop
+    ? stops.findIndex((stop) => String(stop._id) === String(data.nextStop._id))
+    : -1;
   const etaNextIndex = stops.findIndex(
     (stop) => stop._id && data?.etaByStop?.[stop._id],
   );
-  const nextStopIndex =
-    gpsProgress != null
-      ? Math.min(stops.length - 1, Math.ceil(gpsProgress))
-      : etaNextIndex;
+  const nextStopIndex = stopLocationUnavailable
+    ? -1
+    : reportedNextStopIndex >= 0
+      ? reportedNextStopIndex
+      : isStopped && currentStopIndex >= 0
+        ? Math.min(stops.length - 1, currentStopIndex + 1)
+        : gpsProgress != null
+          ? Math.min(stops.length - 1, Math.ceil(gpsProgress))
+          : etaNextIndex;
   const nextStop = nextStopIndex >= 0 ? stops[nextStopIndex] : null;
   const selected =
     stops.find((stop) => stop.key === selectedStopId) || nextStop || stops[0];
@@ -143,6 +176,23 @@ export default function StudentDashboard() {
     ? Date.now() - new Date(timestamp).getTime() > 120000
     : false;
   const status = stale ? "stale" : data?.status || bus?.status || "offline";
+  const stoppedMessage = currentStop?.name
+    ? `Stopped at/near ${currentStop.name}`
+    : nearestStop?.name
+      ? `Stopped · nearest stop ${nearestStop.name}${nearestStop.distanceKm != null ? ` · ${nearestStop.distanceKm.toFixed(1)} km away` : ""}`
+      : "Stopped";
+  const distanceDisplay = stopLocationUnavailable
+    ? "Stop location unavailable"
+    : nextEta?.distanceKm != null
+      ? `${nextEta.distanceKm.toFixed(1)} km`
+      : nextStop
+        ? "Waiting for GPS"
+        : "No upcoming stop";
+  const etaDisplay = stopLocationUnavailable
+    ? "Stop location unavailable"
+    : nextEta?.minutes != null
+      ? `~${nextEta.minutes} min`
+      : nextStop?.time || (nextStop ? "Waiting for GPS" : "No upcoming stop");
   const positionPercent =
     gpsProgress != null && stops.length
       ? ((gpsProgress + 0.5) / stops.length) * 100
@@ -251,23 +301,35 @@ export default function StudentDashboard() {
                     </span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-slate-900">
-                        {nextStop ? `Next: ${nextStop.label}` : data ? "Live GPS received" : "Waiting for bus GPS"}
+                        {stopLocationUnavailable
+                          ? "Stop location unavailable"
+                          : isStopped
+                            ? stoppedMessage
+                            : nextStop
+                              ? `Next: ${nextStop.label}`
+                              : data
+                                ? "Live GPS received"
+                                : "Waiting for bus GPS"}
                       </p>
                       <p className="text-xs text-slate-500">
-                        {nextEta?.minutes != null
-                          ? `Arrives in about ${nextEta.minutes} min`
-                          : nextStop?.time
-                            ? `Scheduled for ${nextStop.time}`
-                            : connection === "connected" ? "Live connection · awaiting route position" : "Reconnecting to live bus"}
+                        {stopLocationUnavailable
+                          ? "Add valid latitude/longitude stops and attach them to this route."
+                          : nextEta?.minutes != null
+                            ? `Arrives in about ${nextEta.minutes} min`
+                            : nextStop?.time
+                              ? `Scheduled for ${nextStop.time}`
+                              : connection === "connected"
+                                ? "Live connection · awaiting route position"
+                                : "Reconnecting to live bus"}
                       </p>
                     </div>
                   </div>
                   <StatusBadge status={status} />
                 </div>
 
-                {gpsProgress == null && data && (
+                {stopLocationUnavailable && (
                   <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Live GPS is connected, but this route has no geocoded stops to place the bus on the line. Stop times below are scheduled times, not live ETAs.
+                    Stop location unavailable. This route needs stops with valid coordinates before live distance, ETA, or route progress can be calculated. Any listed times are schedule times only.
                   </p>
                 )}
 
@@ -325,6 +387,17 @@ export default function StudentDashboard() {
                                   <span className="block text-xs text-slate-400">{fmtTime(stopEta.arrival)}</span>
                                 )}
                               </>
+                            ) : stopLocationUnavailable ? (
+                              <>
+                                {stop.time && (
+                                  <span className="block text-sm font-bold tabular-nums text-slate-700">
+                                    {stop.time}
+                                  </span>
+                                )}
+                                <span className="text-xs font-semibold text-amber-700">
+                                  Stop location unavailable
+                                </span>
+                              </>
                             ) : stop.time ? (
                               <>
                                 <span className="block text-sm font-bold tabular-nums text-slate-700">{stop.time}</span>
@@ -363,12 +436,18 @@ export default function StudentDashboard() {
               </div>
               <dl className="mt-5 divide-y divide-slate-100 text-sm">
                 <div className="flex items-center justify-between gap-3 py-3">
+                  <dt className="text-slate-500">Current stop</dt>
+                  <dd className="max-w-[60%] text-right font-semibold">
+                    {currentStop?.name || (isStopped ? stoppedMessage : "Between stops")}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between gap-3 py-3">
                   <dt className="flex items-center gap-2 text-slate-500"><Navigation size={15} /> Distance to next stop</dt>
-                  <dd className="font-bold tabular-nums">{nextEta?.distanceKm != null ? `${nextEta.distanceKm.toFixed(1)} km` : "—"}</dd>
+                  <dd className={`text-right font-bold ${stopLocationUnavailable ? "max-w-36 text-xs text-amber-700" : "tabular-nums"}`}>{distanceDisplay}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3 py-3">
                   <dt className="flex items-center gap-2 text-slate-500"><Clock3 size={15} /> ETA</dt>
-                  <dd className="font-bold tabular-nums">{nextEta?.minutes != null ? `~${nextEta.minutes} min` : nextStop?.time || "—"}</dd>
+                  <dd className={`text-right font-bold ${stopLocationUnavailable ? "max-w-36 text-xs text-amber-700" : "tabular-nums"}`}>{etaDisplay}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3 py-3">
                   <dt className="flex items-center gap-2 text-slate-500"><Gauge size={15} /> Speed</dt>

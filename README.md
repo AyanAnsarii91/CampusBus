@@ -70,6 +70,10 @@ npm run dev
 
 Set `MONGO_URI` and `JWT_SECRET` in `.env` before starting the backend. Use `npm run seed` only when you intentionally want to reset a disposable demo database.
 
+Live stop distance and ETA require every route stop to have real latitude and longitude. Add geocoded stops under **Admin → Stops**, then attach them in route order under **Admin → Routes → Ordered geocoded stops**. Stops without valid coordinates cannot be added to a route; legacy routes with missing stop records show **Stop location unavailable** until corrected. Do not use placeholder coordinates.
+
+The backend marks a bus as stopped only after consecutive valid low-speed GPS readings remain below `BUS_STOPPED_SPEED_THRESHOLD_KMH` for `BUS_STOPPED_DURATION_MS`. `BUS_STOP_PROXIMITY_METERS` controls how close the GPS fix must be to a route stop to label the bus “Stopped at/near” that stop. Defaults are `1.5` km/h, `90000` ms, and `120` meters. Unknown speed readings do not count as zero; movement resets the timer and resumes live ETA updates.
+
 > **Warning:** `npm run seed` deletes and recreates users, buses, routes, stops, and trips. Use it only when intentionally resetting a demo database. Do not use it to create drivers in a database with data you want to keep.
 
 ### 2. Frontend

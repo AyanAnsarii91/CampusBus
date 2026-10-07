@@ -9,6 +9,7 @@ import {
   Plus,
   Trash2,
   RefreshCw,
+  Save,
 } from "lucide-react";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
@@ -360,22 +361,50 @@ export function AdminBuses() {
 export function AdminRoutes() {
   const [routes, setRoutes] = useState([]);
   const [stops, setStops] = useState([]);
+  const [stopDrafts, setStopDrafts] = useState({});
   const [name, setName] = useState("");
   const [selected, setSelected] = useState([]);
+  const [savingRouteId, setSavingRouteId] = useState("");
+  const [routeError, setRouteError] = useState("");
   const load = () =>
     Promise.all([routeApi.list(), stopApi.list()]).then(([r, s]) => {
       setRoutes(r.data.routes);
       setStops(s.data.stops);
+      setStopDrafts(
+        Object.fromEntries(
+          r.data.routes.map((route) => [
+            route._id,
+            route.stops.map((stop) => stop._id),
+          ]),
+        ),
+      );
     });
   useEffect(() => {
     load().catch((error) => console.error("Could not load routes.", error));
   }, []);
   const add = async (e) => {
     e.preventDefault();
-    await routeApi.create({ name, stops: selected });
-    setName("");
-    setSelected([]);
-    load();
+    setRouteError("");
+    try {
+      await routeApi.create({ name, stops: selected });
+      setName("");
+      setSelected([]);
+      await load();
+    } catch (error) {
+      setRouteError(error.response?.data?.message || "Could not create this route.");
+    }
+  };
+  const saveRouteStops = async (routeId) => {
+    setSavingRouteId(routeId);
+    setRouteError("");
+    try {
+      await routeApi.update(routeId, { stops: stopDrafts[routeId] || [] });
+      await load();
+    } catch (error) {
+      setRouteError(error.response?.data?.message || "Could not save route stops.");
+    } finally {
+      setSavingRouteId("");
+    }
   };
   const del = async (id) => {
     if (confirm("Delete this route?")) {
@@ -416,13 +445,27 @@ export function AdminRoutes() {
             }
             className="mt-3 min-h-32 w-full rounded-xl border p-2 text-sm"
           >
-            {stops.map((s) => (
-              <option key={s._id} value={s._id}>
-                {s.sequence}. {s.name}
-              </option>
-            ))}
+            {stops.map((stop) => {
+              const hasCoordinates =
+                Number.isFinite(stop.latitude) &&
+                stop.latitude >= -90 &&
+                stop.latitude <= 90 &&
+                Number.isFinite(stop.longitude) &&
+                stop.longitude >= -180 &&
+                stop.longitude <= 180;
+              return (
+                <option key={stop._id} value={stop._id} disabled={!hasCoordinates}>
+                  {stop.sequence}. {stop.name} · {hasCoordinates ? `${stop.latitude}, ${stop.longitude}` : "Stop location unavailable"}
+                </option>
+              );
+            })}
           </select>
         </form>
+        {routeError && (
+          <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700">
+            {routeError}
+          </p>
+        )}
         {routes.map((r) => (
           <div
             key={r._id}
@@ -458,6 +501,57 @@ export function AdminRoutes() {
                 </span>
               ))}
             </div>
+            <div className="mt-5 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <label className="block text-sm font-bold">
+                Ordered geocoded stops
+                <select
+                  multiple
+                  size={Math.min(Math.max(stops.length, 3), 7)}
+                  value={stopDrafts[r._id] || []}
+                  disabled={savingRouteId === r._id}
+                  onChange={(event) =>
+                    setStopDrafts({
+                      ...stopDrafts,
+                      [r._id]: [...event.target.selectedOptions].map((option) => option.value),
+                    })
+                  }
+                  aria-label={`Ordered geocoded stops for ${r.name}`}
+                  className="mt-2 min-h-28 w-full rounded-xl border p-2 text-sm font-normal"
+                >
+                  {stops.map((stop) => {
+                    const hasCoordinates =
+                      Number.isFinite(stop.latitude) &&
+                      stop.latitude >= -90 &&
+                      stop.latitude <= 90 &&
+                      Number.isFinite(stop.longitude) &&
+                      stop.longitude >= -180 &&
+                      stop.longitude <= 180;
+                    return (
+                      <option key={stop._id} value={stop._id} disabled={!hasCoordinates}>
+                        {stop.sequence}. {stop.name} · {hasCoordinates ? `${stop.latitude}, ${stop.longitude}` : "Stop location unavailable"}
+                      </option>
+                    );
+                  })}
+                </select>
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  Stops follow their sequence order. Only stops with valid coordinates can be attached.
+                </span>
+              </label>
+              <button
+                type="button"
+                disabled={savingRouteId === r._id}
+                onClick={() => saveRouteStops(r._id)}
+                className="flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+              >
+                <Save size={16} />
+                {savingRouteId === r._id ? "Saving…" : "Save stops"}
+              </button>
+            </div>
+            {r.scheduledStops?.length > 0 && r.stops.length === 0 && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                This timetable has no geocoded stop records attached. Create each stop with its real coordinates under Stops, then select them here to enable live distance and ETA.
+              </p>
+            )}
             {r.scheduledStops?.length > 0 && (
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -504,6 +598,7 @@ export function AdminRoutes() {
 }
 export function AdminStops() {
   const [stops, setStops] = useState([]);
+  const [error, setError] = useState("");
   const [form, setForm] = useState({
     name: "",
     latitude: "",
@@ -516,14 +611,27 @@ export function AdminStops() {
   }, []);
   const add = async (e) => {
     e.preventDefault();
-    await stopApi.create({
-      ...form,
-      latitude: Number(form.latitude),
-      longitude: Number(form.longitude),
-      sequence: Number(form.sequence),
-    });
-    setForm({ name: "", latitude: "", longitude: "", sequence: 1 });
-    load();
+    setError("");
+    try {
+      const latitude = Number(form.latitude);
+      const longitude = Number(form.longitude);
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+        throw new Error("Latitude must be between -90 and 90.");
+      }
+      if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        throw new Error("Longitude must be between -180 and 180.");
+      }
+      await stopApi.create({
+        ...form,
+        latitude,
+        longitude,
+        sequence: Number(form.sequence),
+      });
+      setForm({ name: "", latitude: "", longitude: "", sequence: 1 });
+      await load();
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || requestError.message || "Could not add stop.");
+    }
   };
   return (
     <Layout>
@@ -544,6 +652,8 @@ export function AdminStops() {
             required
             type="number"
             step="any"
+            min="-90"
+            max="90"
             placeholder="Latitude"
             value={form.latitude}
             onChange={(e) => setForm({ ...form, latitude: e.target.value })}
@@ -553,6 +663,8 @@ export function AdminStops() {
             required
             type="number"
             step="any"
+            min="-180"
+            max="180"
             placeholder="Longitude"
             value={form.longitude}
             onChange={(e) => setForm({ ...form, longitude: e.target.value })}
@@ -569,6 +681,11 @@ export function AdminStops() {
             Add stop
           </button>
         </form>
+        {error && (
+          <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700">
+            {error}
+          </p>
+        )}
         <AdminTable>
           <thead>
             <tr className="border-b bg-slate-50 text-xs uppercase text-slate-500">

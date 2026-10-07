@@ -38,9 +38,10 @@ function connectTripLocation({
           tripId: trip._id,
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
-          speed: position.coords.speed
-            ? Math.max(0, position.coords.speed * 3.6)
-            : 0,
+          speed:
+            position.coords.speed == null
+              ? null
+              : Math.max(0, position.coords.speed * 3.6),
           heading: position.coords.heading,
           timestamp: new Date().toISOString(),
           accuracy: position.coords.accuracy,

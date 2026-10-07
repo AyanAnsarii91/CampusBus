@@ -30,6 +30,7 @@ export async function start(req, res, next) {
       routeId: bus.routeId,
     });
     bus.status = "active";
+    if (bus.currentLocation) bus.currentLocation.lowSpeedSince = undefined;
     await bus.save();
     req.app
       .get("io")
@@ -52,7 +53,14 @@ export async function stop(req, res, next) {
     trip.status = "ended";
     trip.endedAt = new Date();
     await trip.save();
-    await Bus.findByIdAndUpdate(trip.busId, { status: "offline" });
+    await Bus.findByIdAndUpdate(
+      trip.busId,
+      {
+        $set: { status: "offline" },
+        $unset: { "currentLocation.lowSpeedSince": 1 },
+      },
+      { runValidators: true },
+    );
     req.app
       .get("io")
       ?.to(`bus:${trip.busId}`)

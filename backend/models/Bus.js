@@ -22,6 +22,7 @@ const schema = new mongoose.Schema(
       heading: Number,
       accuracy: Number,
       timestamp: Date,
+      lowSpeedSince: Date,
     },
     lastUpdated: Date,
   },
