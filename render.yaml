@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: prashanticampusbus
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://campusbus-1czm.onrender.com/api
+      - key: VITE_SOCKET_URL
+        value: https://campusbus-1czm.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

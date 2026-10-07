@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { readFile } from "node:fs/promises";
 import express from "express";
 import http from "http";
 import cors from "cors";
@@ -16,6 +17,10 @@ import userRoutes from "./routes/users.js";
 import simulatorRoutes from "./routes/simulator.js";
 import { setupSockets } from "./sockets/index.js";
 import { notFound, errorHandler } from "./middleware/error.js";
+const serverStatusTemplate = await readFile(
+  new URL("./views/serverStatus.html", import.meta.url),
+  "utf8",
+);
 const app = express();
 const server = http.createServer(app);
 const defaultOrigins = [
@@ -62,6 +67,20 @@ app.use(
     legacyHeaders: false,
   }),
 );
+app.get("/", (req, res) => {
+  const environment =
+    process.env.NODE_ENV === "production" ? "Production" : "Development";
+  const serverTime = new Date().toISOString();
+  const html = serverStatusTemplate
+    .replaceAll("{{ENVIRONMENT}}", environment)
+    .replaceAll("{{SERVER_TIME}}", serverTime);
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  );
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(html);
+});
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
