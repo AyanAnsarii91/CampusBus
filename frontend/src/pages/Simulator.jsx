@@ -8,6 +8,7 @@ export default function Simulator() {
   const [buses, setBuses] = useState([]),
     [routes, setRoutes] = useState([]),
     [busId, setBusId] = useState(""),
+    [shift, setShift] = useState("morning"),
     [speed, setSpeed] = useState(32),
     [running, setRunning] = useState(false),
     [paused, setPaused] = useState(false),
@@ -30,22 +31,29 @@ export default function Simulator() {
   }, []);
   const bus = buses.find((b) => b._id === busId),
     route = routes.find((r) => r._id === bus?.routeId);
+  const activeStops =
+    shift === "evening" && route?.eveningStops?.length
+      ? route.eveningStops
+      : route?.stops || [];
   const start = async () => {
+    const token =
+      sessionStorage.getItem("campusbus_token") ||
+      localStorage.getItem("campusbus_token");
     const r = await fetch(
       `${API_URL}/simulator/start`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionStorage.getItem("campusbus_token")}`,
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ busId }),
+        body: JSON.stringify({ busId, shift }),
       },
     );
     const data = await r.json();
     trip.current = data.trip;
     socket.current = io(SOCKET_URL, {
-      auth: { token: sessionStorage.getItem("campusbus_token") },
+      auth: { token },
     });
     socket.current.on("connect", () => {
       idx.current = 0;
@@ -56,9 +64,9 @@ export default function Simulator() {
     });
   };
   const step = () => {
-    if (paused || !route?.stops?.length || !socket.current?.connected) return;
-    const a = route.stops[idx.current],
-      b = route.stops[(idx.current + 1) % route.stops.length];
+    if (paused || !activeStops?.length || !socket.current?.connected) return;
+    const a = activeStops[idx.current],
+      b = activeStops[(idx.current + 1) % activeStops.length];
     if (!a || !b) return;
     const total = Math.max(
       1,
@@ -83,24 +91,28 @@ export default function Simulator() {
     socket.current.emit("simulator:location", payload);
     t.current += 3;
     if (fraction >= 1) {
-      idx.current = (idx.current + 1) % route.stops.length;
+      idx.current = (idx.current + 1) % activeStops.length;
       t.current = 0;
     }
   };
   const stop = async () => {
     clearInterval(timer.current);
-    if (trip.current)
+    if (trip.current) {
+      const token =
+        sessionStorage.getItem("campusbus_token") ||
+        localStorage.getItem("campusbus_token");
       await fetch(
         `${API_URL}/simulator/stop`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${sessionStorage.getItem("campusbus_token")}`,
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ tripId: trip.current._id }),
         },
       );
+    }
     socket.current?.disconnect();
     trip.current = null;
     setRunning(false);
@@ -121,11 +133,41 @@ export default function Simulator() {
           <div className="h-[58vh] min-h-[420px] overflow-hidden rounded-2xl border bg-white">
             <MapView
               location={pos}
-              stops={route?.stops || []}
-              route={route?.stops || []}
+              stops={activeStops}
+              route={activeStops}
             />
           </div>
           <div className="space-y-4 rounded-2xl border bg-white p-5 shadow-sm">
+            <div>
+              <label className="block text-xs font-bold uppercase text-slate-500">
+                Shift Mode
+              </label>
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  disabled={running}
+                  onClick={() => setShift("morning")}
+                  className={`rounded-lg py-1.5 text-xs font-bold transition-all ${shift === "morning"
+                    ? "bg-white text-blue-700 shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                    } disabled:opacity-60`}
+                >
+                  🌅 Morning
+                </button>
+                <button
+                  type="button"
+                  disabled={running}
+                  onClick={() => setShift("evening")}
+                  className={`rounded-lg py-1.5 text-xs font-bold transition-all ${shift === "evening"
+                    ? "bg-white text-amber-700 shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                    } disabled:opacity-60`}
+                >
+                  🌆 Evening
+                </button>
+              </div>
+            </div>
+
             <label className="block text-sm font-bold">
               Bus
               <select

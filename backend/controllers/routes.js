@@ -32,16 +32,20 @@ async function validateRouteStops(stops) {
   if (
     records.some(
       (stop) =>
-        !Number.isFinite(stop.latitude) ||
-        stop.latitude < -90 ||
-        stop.latitude > 90 ||
-        !Number.isFinite(stop.longitude) ||
-        stop.longitude < -180 ||
-        stop.longitude > 180,
+        (stop.latitude != null &&
+          (!Number.isFinite(stop.latitude) ||
+            stop.latitude < -90 ||
+            stop.latitude > 90)) ||
+        (stop.longitude != null &&
+          (!Number.isFinite(stop.longitude) ||
+            stop.longitude < -180 ||
+            stop.longitude > 180)),
     )
   ) {
     throw Object.assign(
-      new Error("Every route stop must have valid latitude and longitude."),
+      new Error(
+        "Coordinates must be valid numbers (latitude: -90..90, longitude: -180..180).",
+      ),
       { status: 400 },
     );
   }
@@ -50,10 +54,11 @@ async function validateRouteStops(stops) {
 }
 export async function list(req, res, next) {
   try {
-    const routes = await Route.find().populate({
-      path: "stops",
-      options: { sort: { sequence: 1 } },
-    });
+    const routes = await Route.find()
+      .populate("stops")
+      .populate("scheduledStops.stopId")
+      .populate("eveningStops")
+      .populate("eveningScheduledStops.stopId");
     res.json({ routes });
   } catch (e) {
     next(e);
@@ -61,10 +66,11 @@ export async function list(req, res, next) {
 }
 export async function get(req, res, next) {
   try {
-    const route = await Route.findById(req.params.id).populate({
-      path: "stops",
-      options: { sort: { sequence: 1 } },
-    });
+    const route = await Route.findById(req.params.id)
+      .populate("stops")
+      .populate("scheduledStops.stopId")
+      .populate("eveningStops")
+      .populate("eveningScheduledStops.stopId");
     if (!route) return res.status(404).json({ message: "Route not found" });
     res.json({ route });
   } catch (e) {
@@ -75,7 +81,13 @@ export async function create(req, res, next) {
   try {
     const body = req.body || {};
     const stops = await validateRouteStops(body.stops || []);
-    const route = await Route.create({ ...body, stops });
+    const eveningStops = body.eveningStops ? await validateRouteStops(body.eveningStops) : [];
+    let route = await Route.create({ ...body, stops, eveningStops });
+    route = await Route.findById(route._id)
+      .populate("stops")
+      .populate("scheduledStops.stopId")
+      .populate("eveningStops")
+      .populate("eveningScheduledStops.stopId");
     res.status(201).json({ route });
   } catch (e) {
     next(e);
@@ -88,10 +100,20 @@ export async function update(req, res, next) {
     if (Object.hasOwn(body, "stops")) {
       updates.stops = await validateRouteStops(body.stops);
     }
+    if (Object.hasOwn(body, "eveningStops")) {
+      updates.eveningStops = await validateRouteStops(body.eveningStops);
+    }
+    if (Object.hasOwn(body, "eveningScheduledStops")) {
+      updates.eveningScheduledStops = body.eveningScheduledStops;
+    }
     const route = await Route.findByIdAndUpdate(req.params.id, updates, {
       new: true,
       runValidators: true,
-    });
+    })
+      .populate("stops")
+      .populate("scheduledStops.stopId")
+      .populate("eveningStops")
+      .populate("eveningScheduledStops.stopId");
     if (!route) return res.status(404).json({ message: "Route not found" });
     res.json({ route });
   } catch (e) {

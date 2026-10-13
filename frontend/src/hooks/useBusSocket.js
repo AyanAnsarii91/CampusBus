@@ -13,9 +13,12 @@ export function useBusSocket(busId, enabled = true) {
   const [connection, setConnection] = useState("connecting");
   useEffect(() => {
     if (!enabled || !busId) return;
+    const token =
+      sessionStorage.getItem("campusbus_token") ||
+      localStorage.getItem("campusbus_token");
     const socket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
-      auth: { token: sessionStorage.getItem("campusbus_token") },
+      auth: { token },
     });
     socketRef.current = socket;
     socket.on("connect", () => {
@@ -26,7 +29,13 @@ export function useBusSocket(busId, enabled = true) {
     socket.on("connect_error", () => setConnection("error"));
     socket.on("bus:location", (data) => setLocation(data));
     socket.on("bus:status", (data) => {
-      setLocation((prev) => ({ ...(prev || {}), ...data }));
+      setLocation((prev) => ({
+        ...(prev || {}),
+        ...data,
+        ...(data.status === "offline"
+          ? { latitude: null, longitude: null, speed: null, isLive: false }
+          : {}),
+      }));
       notify(
         "CampusBus",
         data.status === "offline"
@@ -34,12 +43,39 @@ export function useBusSocket(busId, enabled = true) {
           : `Bus status: ${data.status}`,
       );
     });
-    socket.on("trip:started", () =>
-      notify("CampusBus", "Your bus trip has started."),
-    );
-    socket.on("trip:ended", () =>
-      notify("CampusBus", "Your bus trip has ended."),
-    );
+    socket.on("trip:started", (data) => {
+      setLocation((prev) => ({
+        ...(prev || {}),
+        tripStarted: true,
+        tripEnded: false,
+        activeTrip: data,
+        lastTrip: null,
+        status: "active",
+        shift: data.shift,
+        latitude: null,
+        longitude: null,
+        speed: null,
+        isLive: false,
+      }));
+      notify("CampusBus", "Your bus trip has started.");
+    });
+    socket.on("trip:ended", (data) => {
+      setLocation((prev) => ({
+        ...(prev || {}),
+        tripEnded: true,
+        tripEndedData: data,
+        activeTrip: null,
+        lastTrip: data,
+        status: "offline",
+        latitude: null,
+        longitude: null,
+        speed: null,
+        etaByStop: {},
+        delaysByStop: {},
+        isLive: false,
+      }));
+      notify("CampusBus", "Your bus trip has ended.");
+    });
     return () => {
       socket.emit("student:untrack-bus", { busId });
       socket.disconnect();

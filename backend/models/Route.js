@@ -12,8 +12,15 @@ const schema = new mongoose.Schema({
   scheduledStops: [{
     place: { type: String, required: true, trim: true },
     time: { type: String, required: true, trim: true },
+    stopId: { type: mongoose.Schema.Types.ObjectId, ref: "BusStop", default: null },
   }],
   stops: [{ type: mongoose.Schema.Types.ObjectId, ref: "BusStop" }],
+  eveningScheduledStops: [{
+    place: { type: String, required: true, trim: true },
+    time: { type: String, required: true, trim: true },
+    stopId: { type: mongoose.Schema.Types.ObjectId, ref: "BusStop", default: null },
+  }],
+  eveningStops: [{ type: mongoose.Schema.Types.ObjectId, ref: "BusStop" }],
   createdAt: { type: Date, default: Date.now },
 });
 export default mongoose.model("Route", schema);

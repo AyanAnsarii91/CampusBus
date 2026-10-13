@@ -8,19 +8,24 @@
     "start": "node server.js",
     "seed": "node seed.js",
     "add:route-07": "node add-route-07.js",
+    "add:route-02": "node add-route-02.js",
     "admin:create": "node create-admin.js",
     "admin:reset-password": "node reset-admin-password.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "bcryptjs": "^3.0.2",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
+    "firebase": "^13.0.0",
+    "firebase-admin": "^14.5.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.19.2",
+    "multer": "^2.4.0",
     "socket.io": "^4.8.1"
   }
 }

@@ -18,7 +18,9 @@ export const SOCKET_URL = withoutTrailingSlash(
 
 const api = axios.create({ baseURL: API_URL, timeout: 10000 });
 api.interceptors.request.use((config) => {
-  const token = sessionStorage.getItem("campusbus_token");
+  const token =
+    localStorage.getItem("campusbus_token") ||
+    sessionStorage.getItem("campusbus_token");
   if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -28,7 +30,14 @@ api.interceptors.request.use((config) => {
 export const authApi = {
   login: (data) => api.post("/auth/login", data),
   register: (data) => api.post("/auth/register", data),
+  firebaseLogin: (data) => api.post("/auth/firebase", data),
   me: () => api.get("/auth/me"),
+  updateProfile: (data) => api.put("/auth/profile", data),
+  uploadPhoto: (formData) =>
+    api.post("/auth/profile/photo", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }),
+  deletePhoto: () => api.delete("/auth/profile/photo"),
 };
 export const busApi = {
   list: () => api.get("/buses"),
@@ -47,9 +56,10 @@ export const routeApi = {
   remove: (id) => api.delete(`/routes/${id}`),
 };
 export const stopApi = {
-  list: () => api.get("/stops"),
+  list: (params) => api.get("/stops", { params }),
   create: (d) => api.post("/stops", d),
   update: (id, d) => api.put(`/stops/${id}`, d),
+  reorder: (d) => api.put("/stops/reorder", d),
   remove: (id) => api.delete(`/stops/${id}`),
 };
 export const tripApi = {

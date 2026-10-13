@@ -31,9 +31,16 @@ export default function MapView({
   const points = route.length
     ? route.map((s) => [s.latitude, s.longitude])
     : stops.map((s) => [s.latitude, s.longitude]);
-  const center = location
+  const isLiveLocation = Boolean(
+    location &&
+    Number.isFinite(location.latitude) &&
+    Number.isFinite(location.longitude) &&
+    location.isLive !== false &&
+    !location.stale
+  );
+  const center = isLiveLocation
     ? [location.latitude, location.longitude]
-    : points[0] || [22.7196, 75.8577];
+    : points[Math.floor(points.length / 2)] || points[0] || [22.7196, 75.8577];
   return (
     <MapContainer
       center={center}
@@ -75,7 +82,7 @@ export default function MapView({
               pathOptions={{ color: "#16a34a", weight: 3, fillOpacity: 0.08 }}
             />
           ))}
-      {location?.latitude != null && (
+      {isLiveLocation && (
         <Marker
           position={[location.latitude, location.longitude]}
           icon={busIcon}
@@ -83,7 +90,7 @@ export default function MapView({
           <Popup>
             <strong>Live Bus</strong>
             <br />
-            {Math.round(location.speed || 0)} km/h
+            {location.speed != null ? `${Math.round(location.speed)} km/h` : "Live location"}
           </Popup>
         </Marker>
       )}

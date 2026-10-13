@@ -24,18 +24,27 @@ export async function start(req, res, next) {
       return res
         .status(409)
         .json({ message: "Bus already has an active trip" });
+    const shift = req.body?.shift || (new Date().getHours() >= 13 ? "evening" : "morning");
     const trip = await Trip.create({
       busId: bus._id,
       driverId,
       routeId: bus.routeId,
+      shift,
     });
     bus.status = "active";
-    if (bus.currentLocation) bus.currentLocation.lowSpeedSince = undefined;
+    bus.currentLocation = undefined;
+    bus.lastUpdated = new Date();
     await bus.save();
+    clearSpeedCache(String(bus._id));
     req.app
       .get("io")
       ?.to(`bus:${bus._id}`)
-      .emit("trip:started", { tripId: trip._id, busId: bus._id });
+      .emit("trip:started", {
+        tripId: trip._id,
+        busId: bus._id,
+        shift: trip.shift,
+        startedAt: trip.startedAt,
+      });
     res.status(201).json({ trip });
   } catch (e) {
     next(e);
@@ -57,14 +66,22 @@ export async function stop(req, res, next) {
       trip.busId,
       {
         $set: { status: "offline" },
-        $unset: { "currentLocation.lowSpeedSince": 1 },
+        $unset: { currentLocation: 1, lastUpdated: 1 },
       },
       { runValidators: true },
     );
     req.app
       .get("io")
       ?.to(`bus:${trip.busId}`)
-      .emit("trip:ended", { tripId: trip._id, busId: trip.busId });
+      .emit("trip:ended", {
+        tripId: trip._id,
+        busId: trip.busId,
+        status: "ended",
+        shift: trip.shift,
+        startedAt: trip.startedAt,
+        endedAt: trip.endedAt,
+        stopArrivals: trip.stopArrivals || [],
+      });
     clearSpeedCache(String(trip.busId));
     res.json({ trip });
   } catch (e) {

@@ -189,3 +189,42 @@ export function buildEtas(position, stops, recentSpeeds = [], startIndex) {
   }
   return result;
 }
+
+export function computeStopDelay(scheduledTime, predictedArrivalOrDate, baseDate = new Date()) {
+  if (!scheduledTime) return null;
+  const cleanTime = String(scheduledTime).trim();
+  const match = cleanTime.match(/^(\d{1,2}):(\d{2})(?:\s*([aApP][mM]))?$/);
+  if (!match) return null;
+
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const ampm = match[3]?.toUpperCase();
+
+  if (ampm === "PM" && hours < 12) hours += 12;
+  if (ampm === "AM" && hours === 12) hours = 0;
+
+  const sched = new Date(baseDate);
+  sched.setHours(hours, minutes, 0, 0);
+
+  const pred = new Date(predictedArrivalOrDate);
+  const diffMinutes = Math.round((pred.getTime() - sched.getTime()) / 60000);
+
+  let status = "On time";
+  let statusType = "on_time";
+  if (diffMinutes > 2) {
+    status = `${diffMinutes} min late`;
+    statusType = "late";
+  } else if (diffMinutes < -2) {
+    status = `${Math.abs(diffMinutes)} min early`;
+    statusType = "early";
+  }
+
+  return {
+    diffMinutes,
+    status,
+    statusType,
+    scheduledTime: cleanTime,
+    predictedArrival: pred.toISOString(),
+  };
+}
+

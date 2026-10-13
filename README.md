@@ -127,6 +127,16 @@ Remove-Item Env:ADMIN_NAME, Env:ADMIN_EMAIL, Env:ADMIN_PASSWORD
 
 The password must be at least 12 characters. The command hashes it with bcrypt and creates an account only when no active admin exists; otherwise, it reports that no changes were made. It never modifies or deletes users, buses, routes, stops, or trips. It does not reset an existing admin password.
 
+To change an existing active admin's password, run `npm run admin:reset-password` from `backend`. Enter the admin email, then type the new password at the hidden terminal prompt. The password must be at least 8 characters. This command updates only the matching active admin's bcrypt password hash; it does not create accounts or modify any other records. Never run `npm run seed` to reset a password.
+
+To reset the password for an existing active admin, run this from `backend`:
+
+```powershell
+npm run admin:reset-password
+```
+
+Enter the admin email when prompted, then enter the new password. Password input is hidden. The command requires an active account with role `admin`, enforces the application's 8-character minimum, hashes with bcrypt, and updates only that account's password field. It does not create an admin or modify other records. `npm run admin:create` remains the separate first-admin provisioning command.
+
 ## End-to-end test
 
 1. Start MongoDB.

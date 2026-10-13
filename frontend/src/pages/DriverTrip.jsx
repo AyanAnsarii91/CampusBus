@@ -93,6 +93,9 @@ export default function DriverTrip() {
   const [bus, setBus] = useState(null);
   const [route, setRoute] = useState(null);
   const [trip, setTrip] = useState(null);
+  const [shift, setShift] = useState(() =>
+    new Date().getHours() >= 13 ? "evening" : "morning"
+  );
   const [tripLoading, setTripLoading] = useState(true);
   const [pos, setPos] = useState(null);
   const [gpsError, setGpsError] = useState("");
@@ -147,12 +150,14 @@ export default function DriverTrip() {
           );
         });
         if (activeTrip) {
+          if (activeTrip.shift) setShift(activeTrip.shift);
           const token = sessionStorage.getItem("campusbus_token");
           setTrip(activeTrip);
           setPos(assignedBus.currentLocation || null);
           console.info("[DriverTrip] Restored active trip after page load.", {
             tripId: activeTrip._id,
             busId: assignedBus._id,
+            shift: activeTrip.shift,
           });
           if (token) {
             tripAuthConfig.current = {
@@ -202,6 +207,7 @@ export default function DriverTrip() {
     console.info("[DriverTrip] Requesting trip start.", {
       busId: bus._id,
       busNumber: bus.busNumber,
+      shift,
     });
     const token = sessionStorage.getItem("campusbus_token");
     if (!token) {
@@ -212,13 +218,15 @@ export default function DriverTrip() {
       headers: { Authorization: `Bearer ${token}` },
     };
     try {
-      const r = await tripApi.start({ busId: bus._id }, authConfig);
+      const r = await tripApi.start({ busId: bus._id, shift }, authConfig);
       tripAuthConfig.current = authConfig;
       setTrip(r.data.trip);
+      if (r.data.trip?.shift) setShift(r.data.trip.shift);
       console.info("[DriverTrip] Trip created.", {
         tripId: r.data.trip._id,
         busId: r.data.trip.busId,
         routeId: r.data.trip.routeId,
+        shift: r.data.trip.shift,
       });
       socket.current = connectTripLocation({
         bus,
@@ -261,6 +269,20 @@ export default function DriverTrip() {
     socket.current?.disconnect();
     setPos(null);
   };
+  const currentShift = trip?.shift || shift;
+  const displayStops =
+    currentShift === "evening" && route?.eveningStops?.length
+      ? route.eveningStops
+      : route?.stops || [];
+
+  const completedStopIds = new Set(
+    (trip?.stopArrivals || []).map((a) => String(a.stopId || a.stopName))
+  );
+  const nextStop =
+    displayStops.find(
+      (s) => !completedStopIds.has(String(s._id || s.name))
+    ) || displayStops[displayStops.length - 1];
+
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-5">
@@ -277,21 +299,64 @@ export default function DriverTrip() {
           <div className="h-[55vh] min-h-[400px] overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <MapView
               location={pos}
-              stops={route?.stops || []}
-              route={route?.stops || []}
+              stops={displayStops}
+              route={displayStops}
             />
           </div>
           <div className="space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center gap-2 text-sm font-bold">
-                <Radio
-                  size={18}
-                  className={
-                    trip ? "text-emerald-600 pulse-soft" : "text-slate-400"
-                  }
-                />{" "}
-                {trip ? "Trip Active" : "Trip Offline"}
+              <div className="flex items-center justify-between text-sm font-bold">
+                <div className="flex items-center gap-2">
+                  <Radio
+                    size={18}
+                    className={
+                      trip ? "text-emerald-600 pulse-soft" : "text-slate-400"
+                    }
+                  />{" "}
+                  {trip ? "Trip Active" : "Trip Offline"}
+                </div>
+                {trip && (
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${currentShift === "evening"
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-blue-100 text-blue-800"
+                      }`}
+                  >
+                    {currentShift === "evening" ? "🌆 Evening" : "🌅 Morning"}
+                  </span>
+                )}
               </div>
+
+              {!trip && (
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Select Trip Shift
+                  </p>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShift("morning")}
+                      className={`rounded-lg py-2 text-xs font-bold transition-all ${shift === "morning"
+                        ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-300"
+                        : "text-slate-600 hover:text-slate-900"
+                        }`}
+                    >
+                      🌅 Morning Pickup
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShift("evening")}
+                      className={`rounded-lg py-2 text-xs font-bold transition-all ${shift === "evening"
+                        ? "bg-white text-amber-700 shadow-sm ring-1 ring-amber-300"
+                        : "text-slate-600 hover:text-slate-900"
+                        }`}
+                    >
+                      🌆 Evening Drop
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-5 space-y-4">
                 <div>
                   <p className="text-xs uppercase text-slate-400">GPS</p>
@@ -308,7 +373,7 @@ export default function DriverTrip() {
                 <div>
                   <p className="text-xs uppercase text-slate-400">Next stop</p>
                   <p className="mt-1 font-bold">
-                    {route?.stops?.[0]?.name || "—"}
+                    {nextStop?.name || "—"}
                   </p>
                 </div>
               </div>
@@ -323,15 +388,15 @@ export default function DriverTrip() {
                   type="button"
                   disabled={tripLoading || !bus}
                   onClick={start}
-                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3.5 font-black text-white disabled:cursor-wait disabled:opacity-60"
+                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3.5 font-black text-white hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
                 >
                   <Navigation size={18} />
-                  {tripLoading ? "CHECKING TRIP…" : "START TRIP"}
+                  {tripLoading ? "CHECKING TRIP…" : `START ${shift === "evening" ? "EVENING DROP" : "MORNING PICKUP"}`}
                 </button>
               ) : (
                 <button
                   onClick={stop}
-                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 py-3.5 font-black text-white"
+                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 py-3.5 font-black text-white hover:bg-red-700"
                 >
                   <Square size={17} /> STOP TRIP
                 </button>

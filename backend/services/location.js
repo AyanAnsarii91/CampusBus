@@ -4,6 +4,7 @@ import Trip from "../models/Trip.js";
 import BusStop from "../models/BusStop.js";
 import {
   buildEtas,
+  computeStopDelay,
   routeTrackingState,
 } from "./eta.js";
 const speedCache = new Map();
@@ -72,10 +73,11 @@ export async function processLocation(payload) {
     throw Object.assign(new Error("Active trip not found"), { status: 403 });
   const bus = await Bus.findById(busId);
   if (!bus) throw Object.assign(new Error("Bus not found"), { status: 404 });
-  const route = await Route.findById(bus.routeId).populate({
-    path: "stops",
-    options: { sort: { sequence: 1 } },
-  });
+  const route = await Route.findById(bus.routeId)
+    .populate("stops")
+    .populate("eveningStops")
+    .populate("scheduledStops.stopId")
+    .populate("eveningScheduledStops.stopId");
   const list = speedCache.get(busId) || [];
   if (Number.isFinite(speed)) list.push(speed);
   while (list.length > 8) list.shift();
@@ -96,10 +98,30 @@ export async function processLocation(payload) {
     timestamp: new Date(timestamp || Date.now()),
     lowSpeedSince,
   };
-  const stops = route?.stops || [];
+
+  const isEvening = trip.shift === "evening";
+  const rawStops = (isEvening && route?.eveningStops?.length ? route.eveningStops : route?.stops) || [];
+  const stops = rawStops.filter(Boolean);
+  const scheduledStops = (isEvening && route?.eveningScheduledStops?.length ? route.eveningScheduledStops : route?.scheduledStops) || [];
+
+  const geocodedStops = stops.filter(
+    (s) =>
+      Number.isFinite(s?.latitude) &&
+      s.latitude >= -90 &&
+      s.latitude <= 90 &&
+      Number.isFinite(s?.longitude) &&
+      s.longitude >= -180 &&
+      s.longitude <= 180,
+  );
+  const stopsToTrack =
+    stops.length > 0 &&
+      stops.every((s) => Number.isFinite(s?.latitude) && Number.isFinite(s?.longitude))
+      ? stops
+      : geocodedStops;
+
   const tracking = routeTrackingState(
     current,
-    stops,
+    stopsToTrack,
     isStopped,
     STOP_PROXIMITY_METERS,
   );
@@ -107,20 +129,139 @@ export async function processLocation(payload) {
   bus.lastUpdated = receivedAt;
   bus.status = isStopped ? "stopped" : "active";
   await bus.save();
+
+  // Record stop arrival if currently at stop
+  if (tracking.currentStop) {
+    const curStopIdStr = String(tracking.currentStop._id);
+    const existing = (trip.stopArrivals || []).find((a) => String(a.stopId) === curStopIdStr);
+    if (!existing) {
+      if (!trip.stopArrivals) trip.stopArrivals = [];
+      const sched = scheduledStops.find(
+        (s) => String(s.stopId?._id || s.stopId) === curStopIdStr ||
+          (s.place && s.place.trim().toLowerCase() === tracking.currentStop.name.trim().toLowerCase())
+      );
+      let delayMinutes = 0;
+      if (sched?.time) {
+        const d = computeStopDelay(sched.time, receivedAt, receivedAt);
+        if (d) delayMinutes = d.diffMinutes;
+      }
+      trip.stopArrivals.push({
+        stopId: tracking.currentStop._id,
+        stopName: tracking.currentStop.name,
+        arrivedAt: receivedAt,
+        delayMinutes,
+      });
+      await trip.save();
+    }
+  }
+
   const etaByStop =
     tracking.stopLocationAvailable && tracking.nextStopIndex != null
-      ? buildEtas(current, stops, list, tracking.nextStopIndex)
+      ? buildEtas(current, stopsToTrack, list, tracking.nextStopIndex)
       : {};
+
+  // Compute live delays for upcoming stops based on ETA
+  const delaysByStop = {};
+  for (const stop of stopsToTrack) {
+    const stopIdStr = String(stop._id);
+    const etaItem = etaByStop[stopIdStr];
+    const sched = scheduledStops.find(
+      (s) => String(s.stopId?._id || s.stopId) === stopIdStr ||
+        (s.place && s.place.trim().toLowerCase() === stop.name?.trim().toLowerCase())
+    );
+    if (sched?.time && etaItem?.arrival) {
+      const delayObj = computeStopDelay(sched.time, etaItem.arrival, receivedAt);
+      if (delayObj) delaysByStop[stopIdStr] = delayObj;
+    }
+  }
+
   return {
     busId,
     tripId,
+    shift: trip.shift,
     ...current,
     etaByStop,
+    delaysByStop,
+    stopArrivals: trip.stopArrivals || [],
     status: bus.status,
     ...tracking,
     isStopped,
+    isLive: true,
+    stale: false,
   };
 }
+
+export async function getBusTrackingState(bus, activeTrip) {
+  if (!bus || !activeTrip || !bus.currentLocation) return null;
+  const route = await Route.findById(bus.routeId)
+    .populate("stops")
+    .populate("eveningStops")
+    .populate("scheduledStops.stopId")
+    .populate("eveningScheduledStops.stopId");
+
+  const isEvening = activeTrip.shift === "evening";
+  const rawStops =
+    (isEvening && route?.eveningStops?.length ? route.eveningStops : route?.stops) || [];
+  const stops = rawStops.filter(Boolean);
+  const scheduledStops =
+    (isEvening && route?.eveningScheduledStops?.length
+      ? route.eveningScheduledStops
+      : route?.scheduledStops) || [];
+
+  const geocodedStops = stops.filter(
+    (s) =>
+      Number.isFinite(s?.latitude) &&
+      s.latitude >= -90 &&
+      s.latitude <= 90 &&
+      Number.isFinite(s?.longitude) &&
+      s.longitude >= -180 &&
+      s.longitude <= 180,
+  );
+  const stopsToTrack =
+    stops.length > 0 &&
+    stops.every((s) => Number.isFinite(s?.latitude) && Number.isFinite(s?.longitude))
+      ? stops
+      : geocodedStops;
+
+  const current = bus.currentLocation;
+  const isStopped = bus.status === "stopped";
+  const tracking = routeTrackingState(
+    current,
+    stopsToTrack,
+    isStopped,
+    STOP_PROXIMITY_METERS,
+  );
+
+  const list = speedCache.get(String(bus._id)) || [];
+  const etaByStop =
+    tracking.stopLocationAvailable && tracking.nextStopIndex != null
+      ? buildEtas(current, stopsToTrack, list, tracking.nextStopIndex)
+      : {};
+
+  const delaysByStop = {};
+  const receivedAt = current?.timestamp ? new Date(current.timestamp) : new Date();
+  for (const stop of stopsToTrack) {
+    const stopIdStr = String(stop._id);
+    const etaItem = etaByStop[stopIdStr];
+    const sched = scheduledStops.find(
+      (s) =>
+        String(s.stopId?._id || s.stopId) === stopIdStr ||
+        (s.place && s.place.trim().toLowerCase() === stop.name?.trim().toLowerCase()),
+    );
+    if (sched?.time && etaItem?.arrival) {
+      const delayObj = computeStopDelay(sched.time, etaItem.arrival, receivedAt);
+      if (delayObj) delaysByStop[stopIdStr] = delayObj;
+    }
+  }
+
+  return {
+    ...tracking,
+    etaByStop,
+    delaysByStop,
+    isStopped,
+  };
+}
+
 export function clearSpeedCache(busId) {
   speedCache.delete(busId);
 }

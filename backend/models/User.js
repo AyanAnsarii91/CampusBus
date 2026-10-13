@@ -9,7 +9,13 @@ const schema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    password: { type: String, required: true, select: false },
+    password: { type: String, required: false, select: false },
+    firebaseUid: {
+      type: String,
+      sparse: true,
+      unique: true,
+      index: true,
+    },
     role: {
       type: String,
       enum: ["student", "driver", "admin"],
@@ -19,6 +25,8 @@ const schema = new mongoose.Schema(
     lastLoginAt: Date,
     studentId: { type: String, trim: true },
     phone: { type: String, trim: true, maxLength: 32 },
+    dob: { type: String, trim: true }, // YYYY-MM-DD
+    profilePhoto: { type: String, trim: true }, // Supabase storage path: profiles/{userId}/avatar.{ext}
     assignedStop: { type: mongoose.Schema.Types.ObjectId, ref: "BusStop" },
     assignedBusId: { type: mongoose.Schema.Types.ObjectId, ref: "Bus" },
     createdAt: { type: Date, default: Date.now },
