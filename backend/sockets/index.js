@@ -2,6 +2,8 @@ import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { processLocation } from "../services/location.js";
 import Bus from "../models/Bus.js";
+import { verifyFirebaseToken } from "../services/firebaseAuth.js";
+
 export function setupSockets(io) {
   io.use(async (socket, next) => {
     try {
@@ -17,14 +19,40 @@ export function setupSockets(io) {
             ? raw.trim()
             : raw;
       if (!token) return next(new Error("Authentication required"));
-      const p = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(p.id);
-      if (!user || user.isActive === false) {
+
+      let user = null;
+      // 1. Try backend JWT verification
+      try {
+        const p = jwt.verify(token, process.env.JWT_SECRET);
+        user = await User.findById(p.id);
+      } catch (jwtErr) {
+        // 2. Fallback: try Firebase ID token verification
+        try {
+          const decoded = await verifyFirebaseToken(token);
+          if (decoded?.uid) {
+            user = await User.findOne({ firebaseUid: decoded.uid });
+            if (!user && decoded.email) {
+              user = await User.findOne({ email: decoded.email.trim().toLowerCase() });
+            }
+          }
+        } catch (fbErr) {
+          console.warn("[Socket Auth] Handshake token verification failed:", {
+            jwtError: jwtErr.message,
+            fbError: fbErr.message,
+          });
+        }
+      }
+
+      if (!user) {
+        return next(new Error("Invalid token"));
+      }
+      if (user.isActive === false) {
         return next(new Error("User not found or account deactivated"));
       }
       socket.user = user;
       next();
-    } catch {
+    } catch (err) {
+      console.error("[Socket Auth Handshake Error]", err);
       next(new Error("Invalid token"));
     }
   });

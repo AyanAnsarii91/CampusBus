@@ -7,135 +7,16 @@ import { auth } from "../services/firebase";
 import { useAuth } from "../hooks/useAuth";
 import MapView from "../components/MapView";
 
-function connectTripLocation({
-  bus,
-  trip,
-  token,
-  socketRef,
-  watchRef,
-  setPos,
-  setGpsError,
-  hasLoggedGpsFix,
-}) {
-  if (socketRef.current) {
-    socketRef.current.disconnect();
-    socketRef.current = null;
+function getCleanToken(explicitToken = "") {
+  let t =
+    localStorage.getItem("campusbus_token") ||
+    sessionStorage.getItem("campusbus_token") ||
+    explicitToken ||
+    "";
+  if (typeof t === "string" && t.startsWith("Bearer ")) {
+    t = t.slice(7).trim();
   }
-  if (watchRef.current) {
-    navigator.geolocation.clearWatch(watchRef.current);
-    watchRef.current = null;
-  }
-
-  const getLatestCleanToken = () => {
-    let t =
-      localStorage.getItem("campusbus_token") ||
-      sessionStorage.getItem("campusbus_token") ||
-      token ||
-      "";
-    if (typeof t === "string" && t.startsWith("Bearer ")) {
-      t = t.slice(7).trim();
-    }
-    return t;
-  };
-
-  const connection = io(SOCKET_URL, {
-    auth: (cb) => {
-      cb({ token: getLatestCleanToken() });
-    },
-    transports: ["websocket", "polling"],
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-  });
-  socketRef.current = connection;
-
-  connection.on("connect", () => {
-    console.info("[DriverTrip] Socket.IO connected; requesting browser GPS.");
-    setGpsError("");
-    if (!navigator.geolocation) {
-      const message = "This browser does not support location tracking.";
-      console.error("[DriverTrip] Geolocation API is unavailable.");
-      setGpsError(message);
-      return;
-    }
-    if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current);
-    watchRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const payload = {
-          busId: bus._id,
-          tripId: trip._id,
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          speed:
-            position.coords.speed == null
-              ? null
-              : Math.max(0, position.coords.speed * 3.6),
-          heading: position.coords.heading,
-          timestamp: new Date().toISOString(),
-          accuracy: position.coords.accuracy,
-        };
-        setPos(payload);
-        connection.emit("driver:location", payload);
-        if (!hasLoggedGpsFix.current) {
-          hasLoggedGpsFix.current = true;
-          console.info("[DriverTrip] First GPS fix emitted.", {
-            tripId: payload.tripId,
-            accuracyMeters: payload.accuracy,
-            speedKmh: payload.speed,
-          });
-        }
-      },
-      (error) => {
-        console.error("[DriverTrip] Browser GPS failed.", {
-          code: error.code,
-          message: error.message,
-        });
-        setGpsError(error.message);
-      },
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 },
-    );
-  });
-  connection.on("connect_error", async (error) => {
-    console.error("[DriverTrip] Socket.IO connection failed.", {
-      message: error.message,
-    });
-    if (error.message === "Invalid token" || error.message === "Authentication required") {
-      try {
-        const fbUser = auth?.currentUser;
-        if (fbUser) {
-          const freshIdToken = await fbUser.getIdToken(true);
-          const r = await authApi.firebaseLogin({ idToken: freshIdToken });
-          if (r.data?.token) {
-            localStorage.setItem("campusbus_token", r.data.token);
-            connection.auth = { token: r.data.token };
-            connection.connect();
-            return;
-          }
-        }
-      } catch (refreshErr) {
-        console.warn("[DriverTrip] Token refresh on connect_error failed:", refreshErr);
-      }
-      setGpsError(
-        "Driver session has expired. Sign in again to broadcast live location.",
-      );
-    } else {
-      setGpsError(
-        "Trip is active, but the live connection failed. Check the API server and try again.",
-      );
-    }
-  });
-  connection.on("disconnect", (reason) => {
-    console.warn("[DriverTrip] Socket.IO disconnected.", { reason });
-  });
-  connection.on("location:accepted", (event) => {
-    console.debug("[DriverTrip] Backend accepted a GPS update.", event);
-  });
-  connection.on("location:error", (event) => {
-    console.error("[DriverTrip] Backend rejected a GPS update.", event);
-    setGpsError(event.message || "The backend rejected the GPS update.");
-  });
-  return connection;
+  return typeof t === "string" ? t.trim() : "";
 }
 
 export default function DriverTrip() {
@@ -151,8 +32,204 @@ export default function DriverTrip() {
   const [gpsError, setGpsError] = useState("");
   const socket = useRef(null);
   const watch = useRef(null);
+  const latestPos = useRef(null);
+  const busRef = useRef(null);
+  const tripRef = useRef(null);
   const tripAuthConfig = useRef(null);
   const hasLoggedGpsFix = useRef(false);
+
+  // Keep refs in sync for geolocation callbacks
+  useEffect(() => {
+    busRef.current = bus;
+  }, [bus]);
+
+  useEffect(() => {
+    tripRef.current = trip;
+  }, [trip]);
+
+  const startGpsWatching = (activeBusId, activeTripId) => {
+    if (
+      typeof window !== "undefined" &&
+      !window.isSecureContext &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1"
+    ) {
+      setGpsError(
+        "Location tracking requires HTTPS or localhost. Please access the application via HTTPS."
+      );
+      return;
+    }
+    if (!navigator.geolocation) {
+      setGpsError("This browser does not support GPS location tracking.");
+      return;
+    }
+
+    if (watch.current) {
+      navigator.geolocation.clearWatch(watch.current);
+      watch.current = null;
+    }
+    setGpsError("");
+
+    console.info("[DriverTrip] Requesting browser GPS watch.", {
+      busId: activeBusId,
+      tripId: activeTripId,
+    });
+
+    watch.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const currentBus = busRef.current;
+        const currentTrip = tripRef.current;
+        const currentBusId = activeBusId || currentBus?._id;
+        const currentTripId = activeTripId || currentTrip?._id;
+
+        const payload = {
+          busId: currentBusId,
+          tripId: currentTripId,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          speed:
+            position.coords.speed == null
+              ? null
+              : Math.max(0, position.coords.speed * 3.6),
+          heading: position.coords.heading,
+          timestamp: new Date().toISOString(),
+          accuracy: position.coords.accuracy,
+        };
+
+        latestPos.current = payload;
+        setPos(payload);
+        setGpsError("");
+
+        if (socket.current?.connected) {
+          socket.current.emit("driver:location", payload);
+        }
+
+        if (!hasLoggedGpsFix.current) {
+          hasLoggedGpsFix.current = true;
+          console.info("[DriverTrip] First GPS fix acquired and registered.", {
+            tripId: payload.tripId,
+            accuracyMeters: payload.accuracy,
+            speedKmh: payload.speed,
+          });
+        }
+      },
+      (error) => {
+        console.error("[DriverTrip] Browser GPS failed.", {
+          code: error.code,
+          message: error.message,
+        });
+        let msg = error.message;
+        if (error.code === 1) {
+          msg =
+            "Location permission denied. Please allow location access in your browser settings to broadcast live bus location.";
+        } else if (error.code === 2) {
+          msg =
+            "GPS position unavailable. Please ensure GPS/location services are enabled on your device.";
+        } else if (error.code === 3) {
+          msg = "Location request timed out. Waiting for GPS fix...";
+        }
+        setGpsError(msg);
+      },
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
+    );
+  };
+
+  const connectSocket = (assignedBus, activeTrip, explicitToken = "") => {
+    if (socket.current) {
+      socket.current.disconnect();
+      socket.current = null;
+    }
+
+    const currentToken = getCleanToken(explicitToken);
+
+    console.info("[DriverTrip] Connecting Socket.IO to:", SOCKET_URL);
+
+    const connection = io(SOCKET_URL, {
+      auth: (cb) => {
+        cb({ token: getCleanToken(currentToken) });
+      },
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+    });
+    socket.current = connection;
+
+    connection.on("connect", () => {
+      console.info("[DriverTrip] Socket.IO connected successfully.");
+      if (latestPos.current) {
+        connection.emit("driver:location", latestPos.current);
+      }
+    });
+
+    connection.on("connect_error", async (error) => {
+      console.error("[DriverTrip] Socket.IO connection failed.", {
+        message: error.message,
+      });
+
+      if (
+        error.message === "Invalid token" ||
+        error.message === "Authentication required"
+      ) {
+        // 1. Try Firebase refresh if a Firebase session exists
+        try {
+          const fbUser = auth?.currentUser;
+          if (fbUser) {
+            const freshIdToken = await fbUser.getIdToken(true);
+            const r = await authApi.firebaseLogin({ idToken: freshIdToken });
+            if (r.data?.token) {
+              localStorage.setItem("campusbus_token", r.data.token);
+              connection.auth = { token: r.data.token };
+              connection.connect();
+              return;
+            }
+          }
+        } catch (refreshErr) {
+          console.warn("[DriverTrip] Firebase token refresh failed:", refreshErr);
+        }
+
+        // 2. Validate current session against REST API
+        try {
+          const meRes = await authApi.me();
+          if (meRes.data?.user) {
+            const freshToken = getCleanToken();
+            if (freshToken) {
+              connection.auth = { token: freshToken };
+              connection.connect();
+              return;
+            }
+          }
+        } catch (meErr) {
+          console.warn("[DriverTrip] REST session check failed:", meErr);
+        }
+
+        setGpsError(
+          "Driver session has expired or is invalid. Please sign out and sign in again to broadcast live location."
+        );
+      } else {
+        setGpsError(
+          `Live connection notice: ${error.message || "connecting..."}. Local GPS is active.`
+        );
+      }
+    });
+
+    connection.on("disconnect", (reason) => {
+      console.warn("[DriverTrip] Socket.IO disconnected.", { reason });
+    });
+
+    connection.on("location:accepted", (event) => {
+      console.debug("[DriverTrip] Backend accepted a GPS update.", event);
+    });
+
+    connection.on("location:error", (event) => {
+      console.error("[DriverTrip] Backend rejected a GPS update.", event);
+      setGpsError(event.message || "The backend rejected the GPS update.");
+    });
+
+    return connection;
+  };
+
   useEffect(() => {
     let cancelled = false;
     const loadDriverTrip = async () => {
@@ -199,11 +276,10 @@ export default function DriverTrip() {
             String(tripBusId) === String(assignedBus._id)
           );
         });
+
         if (activeTrip) {
           if (activeTrip.shift) setShift(activeTrip.shift);
-          const token =
-            localStorage.getItem("campusbus_token") ||
-            sessionStorage.getItem("campusbus_token");
+          const token = getCleanToken();
           setTrip(activeTrip);
           setPos(assignedBus.currentLocation || null);
           console.info("[DriverTrip] Restored active trip after page load.", {
@@ -215,17 +291,10 @@ export default function DriverTrip() {
             tripAuthConfig.current = {
               headers: { Authorization: `Bearer ${token}` },
             };
-            socket.current = connectTripLocation({
-              bus: assignedBus,
-              trip: activeTrip,
-              token,
-              socketRef: socket,
-              watchRef: watch,
-              setPos,
-              setGpsError,
-              hasLoggedGpsFix,
-            });
           }
+          // Start GPS watching immediately and connect socket
+          startGpsWatching(assignedBus._id, activeTrip._id);
+          connectSocket(assignedBus, activeTrip, token);
         }
       } catch (error) {
         if (!cancelled) {
@@ -248,6 +317,7 @@ export default function DriverTrip() {
       socket.current?.disconnect();
     };
   }, [user]);
+
   const start = async () => {
     setGpsError("");
     hasLoggedGpsFix.current = false;
@@ -256,14 +326,16 @@ export default function DriverTrip() {
       setGpsError("No bus is assigned to your account. Contact an administrator.");
       return;
     }
+
+    // 1. Prompt browser for GPS location IMMEDIATELY on the click event
+    startGpsWatching(bus._id, null);
+
     console.info("[DriverTrip] Requesting trip start.", {
       busId: bus._id,
       busNumber: bus.busNumber,
       shift,
     });
-    const token =
-      localStorage.getItem("campusbus_token") ||
-      sessionStorage.getItem("campusbus_token");
+    const token = getCleanToken();
     if (!token) {
       setGpsError("Your driver session has expired. Sign in again to start a trip.");
       return;
@@ -274,24 +346,19 @@ export default function DriverTrip() {
     try {
       const r = await tripApi.start({ busId: bus._id, shift }, authConfig);
       tripAuthConfig.current = authConfig;
-      setTrip(r.data.trip);
-      if (r.data.trip?.shift) setShift(r.data.trip.shift);
+      const createdTrip = r.data.trip;
+      setTrip(createdTrip);
+      if (createdTrip?.shift) setShift(createdTrip.shift);
       console.info("[DriverTrip] Trip created.", {
-        tripId: r.data.trip._id,
-        busId: r.data.trip.busId,
-        routeId: r.data.trip.routeId,
-        shift: r.data.trip.shift,
+        tripId: createdTrip._id,
+        busId: createdTrip.busId,
+        routeId: createdTrip.routeId,
+        shift: createdTrip.shift,
       });
-      socket.current = connectTripLocation({
-        bus,
-        trip: r.data.trip,
-        token,
-        socketRef: socket,
-        watchRef: watch,
-        setPos,
-        setGpsError,
-        hasLoggedGpsFix,
-      });
+
+      // Update GPS watching with newly created tripId and connect socket
+      startGpsWatching(bus._id, createdTrip._id);
+      connectSocket(bus, createdTrip, token);
     } catch (e) {
       console.error("[DriverTrip] Trip start request failed.", {
         status: e.response?.status,
@@ -319,16 +386,8 @@ export default function DriverTrip() {
           if (existingTrip) {
             setTrip(existingTrip);
             if (existingTrip.shift) setShift(existingTrip.shift);
-            socket.current = connectTripLocation({
-              bus,
-              trip: existingTrip,
-              token,
-              socketRef: socket,
-              watchRef: watch,
-              setPos,
-              setGpsError,
-              hasLoggedGpsFix,
-            });
+            startGpsWatching(bus._id, existingTrip._id);
+            connectSocket(bus, existingTrip, token);
             return;
           }
         } catch (recoverErr) {
@@ -338,6 +397,7 @@ export default function DriverTrip() {
       setGpsError(e.response?.data?.message || "Could not start trip");
     }
   };
+
   const stop = async () => {
     try {
       if (trip) {
@@ -357,8 +417,13 @@ export default function DriverTrip() {
       setGpsError(error.response?.data?.message || "Could not stop trip.");
       return;
     }
-    if (watch.current) navigator.geolocation.clearWatch(watch.current);
+    if (watch.current) {
+      navigator.geolocation.clearWatch(watch.current);
+      watch.current = null;
+    }
     socket.current?.disconnect();
+    socket.current = null;
+    latestPos.current = null;
     setPos(null);
   };
   const currentShift = trip?.shift || shift;
@@ -470,9 +535,20 @@ export default function DriverTrip() {
                 </div>
               </div>
               {gpsError && (
-                <div className="mt-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-800">
-                  <TriangleAlert size={16} />
-                  {gpsError}
+                <div className="mt-4 flex flex-col gap-2 rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                  <div className="flex items-start gap-2">
+                    <TriangleAlert size={16} className="mt-0.5 shrink-0" />
+                    <span>{gpsError}</span>
+                  </div>
+                  {trip && (
+                    <button
+                      type="button"
+                      onClick={() => startGpsWatching(bus?._id, trip?._id)}
+                      className="mt-1 w-fit rounded-lg bg-amber-200 px-3 py-1 text-xs font-bold text-amber-900 transition-colors hover:bg-amber-300"
+                    >
+                      Retry Location Access
+                    </button>
+                  )}
                 </div>
               )}
               {!trip ? (

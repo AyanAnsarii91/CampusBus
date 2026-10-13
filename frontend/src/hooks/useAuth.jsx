@@ -70,6 +70,22 @@ export function AuthProvider({ children }) {
         if (!isMounted) return;
 
         if (fbUser) {
+          // If the locally stored session belongs to an active driver (who uses MongoDB credentials),
+          // do not let background Firebase state overwrite it!
+          const storedUser = (() => {
+            try {
+              return JSON.parse(localStorage.getItem("campusbus_user") || "null");
+            } catch {
+              return null;
+            }
+          })();
+
+          if (storedUser && storedUser.role === "driver" && !storedUser.firebaseUid) {
+            console.info("[CampusBus Auth] Preserving active driver session over background Firebase state.");
+            finishInitialLoad();
+            return;
+          }
+
           // Firebase authenticated user restored from browserLocalPersistence
           try {
             let idToken = await fbUser.getIdToken();
@@ -176,6 +192,13 @@ export function AuthProvider({ children }) {
   };
 
   const login = async (data) => {
+    try {
+      if (auth?.currentUser) {
+        await fbSignOut(auth);
+      }
+    } catch (e) {
+      console.warn("[useAuth] Firebase signout before login notice:", e);
+    }
     const r = await authApi.login(data);
     saveSession(r.data.token, r.data.user);
     return r.data;

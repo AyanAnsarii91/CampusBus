@@ -4,18 +4,37 @@ import { auth } from "./firebase";
 const LOCAL_BACKEND_URL = "http://localhost:5000";
 const PRODUCTION_BACKEND_URL = "https://campusbus-1czm.onrender.com";
 const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-const defaultBackendUrl =
-  typeof window !== "undefined" && localHosts.has(window.location.hostname)
-    ? LOCAL_BACKEND_URL
-    : PRODUCTION_BACKEND_URL;
-const withoutTrailingSlash = (url) => url.replace(/\/+$/, "");
 
-export const API_URL = withoutTrailingSlash(
-  import.meta.env.VITE_API_URL || `${defaultBackendUrl}/api`,
-);
-export const SOCKET_URL = withoutTrailingSlash(
-  import.meta.env.VITE_SOCKET_URL || defaultBackendUrl,
-);
+const isLocalHost =
+  typeof window !== "undefined" && localHosts.has(window.location.hostname);
+
+const withoutTrailingSlash = (url) => String(url || "").replace(/\/+$/, "");
+
+const resolveBackendUrl = () => {
+  const envApi = import.meta.env.VITE_API_URL;
+  const envSocket = import.meta.env.VITE_SOCKET_URL;
+
+  if (isLocalHost) {
+    if (envSocket) return withoutTrailingSlash(envSocket);
+    if (envApi) return withoutTrailingSlash(envApi).replace(/\/api$/, "");
+    return LOCAL_BACKEND_URL;
+  }
+
+  // Remote / production host (e.g. prashanticampusbus.onrender.com or mobile LAN):
+  // Filter out any stale localhost build-time environment variables
+  if (envSocket && !envSocket.includes("localhost") && !envSocket.includes("127.0.0.1")) {
+    return withoutTrailingSlash(envSocket);
+  }
+  if (envApi && !envApi.includes("localhost") && !envApi.includes("127.0.0.1")) {
+    return withoutTrailingSlash(envApi).replace(/\/api$/, "");
+  }
+  return PRODUCTION_BACKEND_URL;
+};
+
+const backendBaseUrl = resolveBackendUrl();
+
+export const API_URL = `${backendBaseUrl}/api`;
+export const SOCKET_URL = backendBaseUrl;
 
 const api = axios.create({ baseURL: API_URL, timeout: 10000 });
 api.interceptors.request.use((config) => {
