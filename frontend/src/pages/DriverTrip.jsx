@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { MapPin, Navigation, Radio, Square, TriangleAlert } from "lucide-react";
 import Layout from "../components/Layout";
-import { SOCKET_URL, busApi, routeApi, tripApi } from "../services/api";
+import { SOCKET_URL, authApi, busApi, routeApi, tripApi } from "../services/api";
+import { auth } from "../services/firebase";
 import { useAuth } from "../hooks/useAuth";
 import MapView from "../components/MapView";
 
@@ -16,14 +17,42 @@ function connectTripLocation({
   setGpsError,
   hasLoggedGpsFix,
 }) {
+  if (socketRef.current) {
+    socketRef.current.disconnect();
+    socketRef.current = null;
+  }
+  if (watchRef.current) {
+    navigator.geolocation.clearWatch(watchRef.current);
+    watchRef.current = null;
+  }
+
+  const getLatestCleanToken = () => {
+    let t =
+      localStorage.getItem("campusbus_token") ||
+      sessionStorage.getItem("campusbus_token") ||
+      token ||
+      "";
+    if (typeof t === "string" && t.startsWith("Bearer ")) {
+      t = t.slice(7).trim();
+    }
+    return t;
+  };
+
   const connection = io(SOCKET_URL, {
-    auth: { token },
+    auth: (cb) => {
+      cb({ token: getLatestCleanToken() });
+    },
     transports: ["websocket", "polling"],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
   });
   socketRef.current = connection;
 
   connection.on("connect", () => {
     console.info("[DriverTrip] Socket.IO connected; requesting browser GPS.");
+    setGpsError("");
     if (!navigator.geolocation) {
       const message = "This browser does not support location tracking.";
       console.error("[DriverTrip] Geolocation API is unavailable.");
@@ -67,13 +96,34 @@ function connectTripLocation({
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 },
     );
   });
-  connection.on("connect_error", (error) => {
+  connection.on("connect_error", async (error) => {
     console.error("[DriverTrip] Socket.IO connection failed.", {
       message: error.message,
     });
-    setGpsError(
-      "Trip is active, but the live connection failed. Check the API server and try again.",
-    );
+    if (error.message === "Invalid token" || error.message === "Authentication required") {
+      try {
+        const fbUser = auth?.currentUser;
+        if (fbUser) {
+          const freshIdToken = await fbUser.getIdToken(true);
+          const r = await authApi.firebaseLogin({ idToken: freshIdToken });
+          if (r.data?.token) {
+            localStorage.setItem("campusbus_token", r.data.token);
+            connection.auth = { token: r.data.token };
+            connection.connect();
+            return;
+          }
+        }
+      } catch (refreshErr) {
+        console.warn("[DriverTrip] Token refresh on connect_error failed:", refreshErr);
+      }
+      setGpsError(
+        "Driver session has expired. Sign in again to broadcast live location.",
+      );
+    } else {
+      setGpsError(
+        "Trip is active, but the live connection failed. Check the API server and try again.",
+      );
+    }
   });
   connection.on("disconnect", (reason) => {
     console.warn("[DriverTrip] Socket.IO disconnected.", { reason });
@@ -247,6 +297,44 @@ export default function DriverTrip() {
         status: e.response?.status,
         message: e.response?.data?.message || e.message,
       });
+      if (
+        e.response?.status === 409 &&
+        typeof e.response?.data?.message === "string" &&
+        e.response.data.message.includes("already has an active trip")
+      ) {
+        try {
+          const activeTripsResponse = await tripApi.active();
+          const driverId = user.id || user._id;
+          const existingTrip = activeTripsResponse.data.trips.find((item) => {
+            const tripDriverId =
+              typeof item.driverId === "object" ? item.driverId?._id : item.driverId;
+            const tripBusId =
+              typeof item.busId === "object" ? item.busId?._id : item.busId;
+            return (
+              item.status === "active" &&
+              String(tripDriverId) === String(driverId) &&
+              String(tripBusId) === String(bus._id)
+            );
+          });
+          if (existingTrip) {
+            setTrip(existingTrip);
+            if (existingTrip.shift) setShift(existingTrip.shift);
+            socket.current = connectTripLocation({
+              bus,
+              trip: existingTrip,
+              token,
+              socketRef: socket,
+              watchRef: watch,
+              setPos,
+              setGpsError,
+              hasLoggedGpsFix,
+            });
+            return;
+          }
+        } catch (recoverErr) {
+          console.warn("[DriverTrip] Active trip recovery error:", recoverErr);
+        }
+      }
       setGpsError(e.response?.data?.message || "Could not start trip");
     }
   };

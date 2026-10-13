@@ -178,6 +178,14 @@ export async function processLocation(payload) {
   return {
     busId,
     tripId,
+    activeTrip: {
+      _id: trip._id,
+      busId: trip.busId,
+      routeId: trip.routeId,
+      shift: trip.shift,
+      startedAt: trip.startedAt,
+      stopArrivals: trip.stopArrivals || [],
+    },
     shift: trip.shift,
     ...current,
     etaByStop,

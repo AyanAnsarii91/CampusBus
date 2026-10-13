@@ -5,7 +5,17 @@ import Bus from "../models/Bus.js";
 export function setupSockets(io) {
   io.use(async (socket, next) => {
     try {
-      const token = socket.handshake.auth?.token;
+      const raw =
+        socket.handshake.auth?.token ||
+        socket.handshake.headers?.authorization ||
+        socket.handshake.auth?.Authorization;
+      if (!raw) return next(new Error("Authentication required"));
+      const token =
+        typeof raw === "string" && raw.startsWith("Bearer ")
+          ? raw.slice(7).trim()
+          : typeof raw === "string"
+            ? raw.trim()
+            : raw;
       if (!token) return next(new Error("Authentication required"));
       const p = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findById(p.id);

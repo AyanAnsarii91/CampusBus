@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import { SOCKET_URL } from "../services/api";
+import { SOCKET_URL, authApi } from "../services/api";
+import { auth } from "../services/firebase";
 
 function notify(title, body) {
   if ("Notification" in window && Notification.permission === "granted")
@@ -13,12 +14,27 @@ export function useBusSocket(busId, enabled = true) {
   const [connection, setConnection] = useState("connecting");
   useEffect(() => {
     if (!enabled || !busId) return;
-    const token =
-      sessionStorage.getItem("campusbus_token") ||
-      localStorage.getItem("campusbus_token");
+
+    const getLatestCleanToken = () => {
+      let t =
+        localStorage.getItem("campusbus_token") ||
+        sessionStorage.getItem("campusbus_token") ||
+        "";
+      if (typeof t === "string" && t.startsWith("Bearer ")) {
+        t = t.slice(7).trim();
+      }
+      return t;
+    };
+
     const socket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
-      auth: { token },
+      auth: (cb) => {
+        cb({ token: getLatestCleanToken() });
+      },
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
     socketRef.current = socket;
     socket.on("connect", () => {
@@ -26,7 +42,25 @@ export function useBusSocket(busId, enabled = true) {
       socket.emit("student:track-bus", { busId });
     });
     socket.on("disconnect", () => setConnection("reconnecting"));
-    socket.on("connect_error", () => setConnection("error"));
+    socket.on("connect_error", async (error) => {
+      setConnection("error");
+      if (error?.message === "Invalid token" || error?.message === "Authentication required") {
+        try {
+          const fbUser = auth?.currentUser;
+          if (fbUser) {
+            const freshIdToken = await fbUser.getIdToken(true);
+            const r = await authApi.firebaseLogin({ idToken: freshIdToken });
+            if (r.data?.token) {
+              localStorage.setItem("campusbus_token", r.data.token);
+              socket.auth = { token: r.data.token };
+              socket.connect();
+            }
+          }
+        } catch (refreshErr) {
+          console.warn("[useBusSocket] Auto token refresh on connect_error failed:", refreshErr);
+        }
+      }
+    });
     socket.on("bus:location", (data) => setLocation(data));
     socket.on("bus:status", (data) => {
       setLocation((prev) => ({
