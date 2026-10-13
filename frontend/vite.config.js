@@ -54,12 +54,15 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff2}"],
         navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io\//],
+        navigateFallbackAllowlist: [/^(?!\/__).*/],
+        navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io\//, /\/api\//, /\/auth\//],
         runtimeCaching: [
-          // CRITICAL: NEVER cache API responses or private tracking/telemetry as public content
+          // CRITICAL: NEVER cache API responses, auth/me, or private tracking/telemetry as public content
           {
             urlPattern: ({ url }) =>
               url.pathname.startsWith("/api") ||
+              url.pathname.includes("/api/") ||
+              url.pathname.includes("/auth/") ||
               url.pathname.startsWith("/socket.io"),
             handler: "NetworkOnly",
           },

@@ -12,7 +12,7 @@ import {
 } from "firebase/auth";
 
 export default function Register() {
-  const { register, loginWithFirebase } = useAuth();
+  const { user, loading: authLoading, register, loginWithFirebase } = useAuth();
   const nav = useNavigate();
 
   const [authMethod, setAuthMethod] = useState("email"); // "email" | "phone"
@@ -33,6 +33,12 @@ export default function Register() {
   const recaptchaVerifierRef = useRef(null);
 
   useEffect(() => {
+    if (!authLoading && user) {
+      nav(`/${user.role}/dashboard`, { replace: true });
+    }
+  }, [user, authLoading, nav]);
+
+  useEffect(() => {
     return () => {
       if (recaptchaVerifierRef.current) {
         try {
@@ -44,6 +50,17 @@ export default function Register() {
       }
     };
   }, []);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-9 w-9 animate-spin rounded-full border-3 border-blue-500 border-t-transparent" />
+          <p className="text-sm font-semibold tracking-wide text-slate-300">Loading CampusBus…</p>
+        </div>
+      </div>
+    );
+  }
 
   // Google Sign-Up
   const handleGoogleSignUp = async () => {

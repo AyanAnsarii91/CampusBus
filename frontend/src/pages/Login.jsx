@@ -27,7 +27,7 @@ import {
 import logoImg from "../assets/PrashantiCampusBusTrackingLogo.png";
 
 export default function Login() {
-  const { login, loginWithFirebase } = useAuth();
+  const { user, loading: authLoading, login, loginWithFirebase } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
 
@@ -47,6 +47,21 @@ export default function Login() {
 
   const recaptchaVerifierRef = useRef(null);
 
+  const redirectAfterLogin = (role) => {
+    const from = location.state?.from;
+    if (from && typeof from === "string") {
+      nav(from, { replace: true });
+    } else {
+      nav(`/${role}/dashboard`, { replace: true });
+    }
+  };
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      redirectAfterLogin(user.role);
+    }
+  }, [user, authLoading]);
+
   useEffect(() => {
     return () => {
       if (recaptchaVerifierRef.current) {
@@ -60,14 +75,16 @@ export default function Login() {
     };
   }, []);
 
-  const redirectAfterLogin = (role) => {
-    const from = location.state?.from;
-    if (from && typeof from === "string") {
-      nav(from, { replace: true });
-    } else {
-      nav(`/${role}/dashboard`, { replace: true });
-    }
-  };
+  if (authLoading) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-9 w-9 animate-spin rounded-full border-3 border-blue-500 border-t-transparent" />
+          <p className="text-sm font-semibold tracking-wide text-slate-300">Loading CampusBus…</p>
+        </div>
+      </div>
+    );
+  }
 
   // Google Authentication
   const handleGoogleSignIn = async () => {

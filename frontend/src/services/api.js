@@ -1,4 +1,5 @@
 import axios from "axios";
+import { auth } from "./firebase";
 
 const LOCAL_BACKEND_URL = "http://localhost:5000";
 const PRODUCTION_BACKEND_URL = "https://campusbus-1czm.onrender.com";
@@ -21,11 +22,67 @@ api.interceptors.request.use((config) => {
   const token =
     localStorage.getItem("campusbus_token") ||
     sessionStorage.getItem("campusbus_token");
-  if (token && !config.headers.Authorization) {
-    config.headers.Authorization = `Bearer ${token}`;
+  if (token) {
+    if (config.headers && typeof config.headers.set === "function") {
+      if (!config.headers.get("Authorization")) {
+        config.headers.set("Authorization", `Bearer ${token}`);
+      }
+    } else {
+      config.headers = config.headers || {};
+      if (!config.headers.Authorization) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
   }
   return config;
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    if (
+      error.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes("/auth/login") &&
+      !originalRequest.url?.includes("/auth/register") &&
+      !originalRequest.url?.includes("/auth/firebase")
+    ) {
+      originalRequest._retry = true;
+      try {
+        const fbUser = auth?.currentUser;
+        if (fbUser) {
+          const freshIdToken = await fbUser.getIdToken(true);
+          const refreshRes = await axios.post(`${API_URL}/auth/firebase`, {
+            idToken: freshIdToken,
+          });
+          const newToken = refreshRes.data?.token;
+          if (newToken) {
+            localStorage.setItem("campusbus_token", newToken);
+            if (refreshRes.data?.user) {
+              localStorage.setItem(
+                "campusbus_user",
+                JSON.stringify(refreshRes.data.user),
+              );
+            }
+            if (originalRequest.headers) {
+              if (typeof originalRequest.headers.set === "function") {
+                originalRequest.headers.set("Authorization", `Bearer ${newToken}`);
+              } else {
+                originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              }
+            }
+            return api(originalRequest);
+          }
+        }
+      } catch {
+        // Token refresh failed; proceed to reject error
+      }
+    }
+    return Promise.reject(error);
+  },
+);
 
 export const authApi = {
   login: (data) => api.post("/auth/login", data),

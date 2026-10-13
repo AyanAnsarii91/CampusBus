@@ -151,7 +151,9 @@ export default function DriverTrip() {
         });
         if (activeTrip) {
           if (activeTrip.shift) setShift(activeTrip.shift);
-          const token = sessionStorage.getItem("campusbus_token");
+          const token =
+            localStorage.getItem("campusbus_token") ||
+            sessionStorage.getItem("campusbus_token");
           setTrip(activeTrip);
           setPos(assignedBus.currentLocation || null);
           console.info("[DriverTrip] Restored active trip after page load.", {
@@ -209,7 +211,9 @@ export default function DriverTrip() {
       busNumber: bus.busNumber,
       shift,
     });
-    const token = sessionStorage.getItem("campusbus_token");
+    const token =
+      localStorage.getItem("campusbus_token") ||
+      sessionStorage.getItem("campusbus_token");
     if (!token) {
       setGpsError("Your driver session has expired. Sign in again to start a trip.");
       return;

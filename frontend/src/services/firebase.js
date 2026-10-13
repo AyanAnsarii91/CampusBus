@@ -31,7 +31,7 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 
 // Explicitly configure browserLocalPersistence so session persists across browser/tab restarts
-setPersistence(auth, browserLocalPersistence).catch((error) => {
+export const persistencePromise = setPersistence(auth, browserLocalPersistence).catch((error) => {
   console.warn("Failed to set browserLocalPersistence for Firebase Auth:", error);
 });
 

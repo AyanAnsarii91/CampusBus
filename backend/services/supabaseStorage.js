@@ -34,6 +34,28 @@ export function getSupabaseClient() {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+    global: {
+      headers: {
+        apikey: key,
+      },
+      fetch: (input, init = {}) => {
+        const headers = new Headers(init?.headers);
+        // Ensure apikey header is always present for authentication
+        if (!headers.has("apikey")) {
+          headers.set("apikey", key);
+        }
+        // When using new-format Supabase secret keys (e.g. sb_secret_...), the key
+        // is NOT a JWT. If @supabase/supabase-js attached `Authorization: Bearer sb_secret_...`,
+        // remove it so the API gateway authenticates via `apikey` and does not attempt
+        // to parse the secret key as a Compact JWS.
+        const auth = headers.get("authorization");
+        if (auth && (auth.includes("sb_secret_") || auth.includes("sb_publishable_"))) {
+          headers.delete("authorization");
+        }
+        return fetch(input, { ...init, headers });
+      },
     },
   });
   lastUrl = url;
@@ -50,15 +72,21 @@ export async function uploadProfilePhoto(userId, fileBuffer, mimeType, originalN
   const { url, key } = getSupabaseCredentials();
 
   if (!url || !key) {
-    throw new Error(
-      "Supabase Storage credentials are not configured in backend/.env. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+    throw Object.assign(
+      new Error(
+        "Supabase Storage credentials are not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+      ),
+      { status: 503 }
     );
   }
 
-  // Detect if user mistakenly pasted the Publishable / Anon key into SUPABASE_SERVICE_ROLE_KEY
+  // Detect if user mistakenly pasted a Publishable key instead of a secret key
   if (key.startsWith("sb_publishable_")) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY in backend/.env is currently set to a Publishable key (starts with sb_publishable_). The backend requires the 'service_role' secret key to bypass Storage RLS policies. In your Supabase Dashboard, go to Project Settings > API > Project API Keys, copy the 'service_role' secret key, and paste it into backend/.env as SUPABASE_SERVICE_ROLE_KEY."
+    throw Object.assign(
+      new Error(
+        "SUPABASE_SERVICE_ROLE_KEY is configured with a publishable key (starts with sb_publishable_). The server requires a secret key (sb_secret_... or service_role JWT) to manage storage."
+      ),
+      { status: 400 }
     );
   }
 
@@ -86,12 +114,25 @@ export async function uploadProfilePhoto(userId, fileBuffer, mimeType, originalN
 
   if (error) {
     console.error("Supabase Storage upload error:", error);
-    if (error.statusCode === "403" || error.status === 400 || error.message?.includes("row-level security")) {
-      throw new Error(
-        `Supabase Storage permission error: ${error.message}. Ensure SUPABASE_SERVICE_ROLE_KEY in backend/.env is the secret service_role key, and bucket '${bucket}' exists in your Supabase Storage dashboard.`
+    const msg = error.message || "Unknown error";
+    if (error.statusCode === "404" || error.status === 404 || msg.toLowerCase().includes("bucket not found")) {
+      throw Object.assign(
+        new Error(`Supabase Storage bucket '${bucket}' not found. Please create the bucket in your Supabase dashboard.`),
+        { status: 404 }
       );
     }
-    throw new Error(`Failed to upload photo to Supabase: ${error.message}`);
+    if (
+      error.statusCode === "403" ||
+      error.status === 400 ||
+      msg.includes("row-level security") ||
+      msg.includes("Compact JWS")
+    ) {
+      throw Object.assign(
+        new Error(`Supabase Storage permission error: ${msg}. Ensure SUPABASE_SERVICE_ROLE_KEY is the secret key and bucket '${bucket}' exists.`),
+        { status: 400 }
+      );
+    }
+    throw Object.assign(new Error(`Failed to upload photo to Supabase: ${msg}`), { status: error.status || 500 });
   }
 
   return storagePath;
@@ -143,4 +184,37 @@ export async function deleteProfilePhoto(storagePath) {
     console.warn("Error deleting photo:", err.message);
     return false;
   }
+}
+
+/**
+ * Diagnostic helper to verify Render environment variables without exposing secrets.
+ */
+export function getSupabaseDiagnostics() {
+  const { url, key } = getSupabaseCredentials();
+  const bucket = getBucketName();
+
+  let keyType = "missing";
+  if (key) {
+    if (key.startsWith("sb_secret_")) keyType = "sb_secret (valid secret key)";
+    else if (key.startsWith("eyJ")) keyType = "jwt (legacy secret key)";
+    else if (key.startsWith("sb_publishable_")) keyType = "sb_publishable (invalid for backend storage)";
+    else keyType = "custom";
+  }
+
+  let maskedUrl = "missing";
+  if (url) {
+    try {
+      const u = new URL(url);
+      maskedUrl = `${u.protocol}//${u.hostname}`;
+    } catch {
+      maskedUrl = "malformed URL";
+    }
+  }
+
+  return {
+    isConfigured: Boolean(url && key && !key.startsWith("sb_publishable_")),
+    url: maskedUrl,
+    keyType,
+    bucket,
+  };
 }

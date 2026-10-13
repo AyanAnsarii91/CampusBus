@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { useAuth } from "./hooks/useAuth";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -58,10 +59,29 @@ export default function App() {
         <Route element={<ProtectedRoute roles={["student", "driver", "admin"]} />}>
           <Route path="/profile" element={<Profile />} />
         </Route>
-        <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/" element={<RootRedirect />} />
+        <Route path="*" element={<RootRedirect />} />
       </Routes>
       <PwaInstallPrompt />
     </>
   );
 }
+
+function RootRedirect() {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-9 w-9 animate-spin rounded-full border-3 border-blue-500 border-t-transparent" />
+          <p className="text-sm font-semibold tracking-wide text-slate-300">Loading CampusBus…</p>
+        </div>
+      </div>
+    );
+  }
+  if (user) {
+    return <Navigate to={`/${user.role}/dashboard`} replace />;
+  }
+  return <Navigate to="/login" replace />;
+}
+

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { authApi } from "../services/api";
-import { auth } from "../services/firebase";
+import { auth, persistencePromise } from "../services/firebase";
 import { onAuthStateChanged, signOut as fbSignOut } from "firebase/auth";
 
 const AuthContext = createContext(null);
@@ -36,62 +36,136 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let isMounted = true;
+    let initialRestorationDone = false;
+    let unsubscribe = null;
 
-    // Listen to Firebase persistent auth state
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+    // Helper to finish initial startup loading safely
+    const finishInitialLoad = () => {
+      if (isMounted && !initialRestorationDone) {
+        initialRestorationDone = true;
+        setLoading(false);
+      }
+    };
+
+    // Safety timeout: Never allow loading to hang indefinitely if Firebase or network is blocked
+    const safetyTimer = setTimeout(() => {
+      if (isMounted && !initialRestorationDone) {
+        console.warn("[CampusBus Auth] Initial restoration timeout reached; completing load.");
+        finishInitialLoad();
+      }
+    }, 6000);
+
+    const initAuth = async () => {
+      // 1. Wait for Firebase browserLocalPersistence to be ready
+      try {
+        await persistencePromise;
+      } catch (err) {
+        console.warn("[CampusBus Auth] Firebase persistence readiness notice:", err);
+      }
+
       if (!isMounted) return;
 
-      if (fbUser) {
-        try {
-          // Exchange / refresh Firebase ID token with CampusBus backend
-          const idToken = await fbUser.getIdToken();
-          const r = await authApi.firebaseLogin({ idToken });
-          if (isMounted) {
-            saveSession(r.data.token, r.data.user);
+      // 2. Restore auth state with onAuthStateChanged before deciding whether user is logged in
+      unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+        if (!isMounted) return;
+
+        if (fbUser) {
+          // Firebase authenticated user restored from browserLocalPersistence
+          try {
+            let idToken = await fbUser.getIdToken();
+            let r;
+            try {
+              r = await authApi.firebaseLogin({ idToken });
+            } catch (exchangeErr) {
+              if (exchangeErr.response?.status === 401) {
+                // ID token expired; force refresh from Firebase servers
+                const freshIdToken = await fbUser.getIdToken(true);
+                r = await authApi.firebaseLogin({ idToken: freshIdToken });
+              } else {
+                throw exchangeErr;
+              }
+            }
+
+            if (isMounted && r?.data) {
+              saveSession(r.data.token, r.data.user);
+            }
+          } catch (err) {
+            console.warn("[CampusBus Auth] Firebase auth restoration notice:", err);
+            if (err.response?.status === 401 || err.response?.status === 403) {
+              if (isMounted) clearSession();
+            } else {
+              // Network error / server offline: Do not log out! Retain cached session for offline PWA
+              const existingToken =
+                localStorage.getItem("campusbus_token") ||
+                sessionStorage.getItem("campusbus_token");
+              if (existingToken) {
+                try {
+                  const meRes = await authApi.me();
+                  if (isMounted && meRes.data?.user) {
+                    saveSession(existingToken, meRes.data.user);
+                  }
+                } catch (meErr) {
+                  if (meErr.response?.status === 401 || meErr.response?.status === 403) {
+                    if (isMounted) clearSession();
+                  } else {
+                    console.info("[CampusBus Auth] Network unavailable. Retaining cached user session for offline PWA.");
+                    const cachedUser = localStorage.getItem("campusbus_user");
+                    if (cachedUser && isMounted) {
+                      try {
+                        setUser(JSON.parse(cachedUser));
+                      } catch {}
+                    }
+                  }
+                }
+              }
+            }
+          } finally {
+            finishInitialLoad();
           }
-        } catch (err) {
-          console.warn("Could not exchange Firebase token with backend:", err);
-          // Fallback: verify current JWT from localStorage if present
-          const existingToken = localStorage.getItem("campusbus_token");
+        } else {
+          // No active Firebase user in persistence. Check if traditional backend JWT exists
+          const existingToken =
+            localStorage.getItem("campusbus_token") ||
+            sessionStorage.getItem("campusbus_token");
+
           if (existingToken) {
             try {
               const r = await authApi.me();
-              if (isMounted) saveSession(existingToken, r.data.user);
-            } catch {
-              if (isMounted) clearSession();
+              if (isMounted && r.data?.user) {
+                saveSession(existingToken, r.data.user);
+              }
+            } catch (err) {
+              if (err.response?.status === 401 || err.response?.status === 403) {
+                // Invalid or expired backend JWT with no Firebase user to reissue it
+                if (isMounted) clearSession();
+              } else {
+                // Server offline or network error: Retain cached session for offline PWA
+                console.info("[CampusBus Auth] Server offline or network unavailable. Retaining cached user session.");
+                const cachedUser = localStorage.getItem("campusbus_user");
+                if (cachedUser && isMounted) {
+                  try {
+                    setUser(JSON.parse(cachedUser));
+                  } catch {}
+                }
+              }
+            } finally {
+              finishInitialLoad();
             }
           } else {
+            // No stored credentials at all
             if (isMounted) clearSession();
-          }
-        } finally {
-          if (isMounted) setLoading(false);
-        }
-      } else {
-        // No Firebase user. Check if traditional backend session token exists
-        const existingToken =
-          localStorage.getItem("campusbus_token") ||
-          sessionStorage.getItem("campusbus_token");
-        if (existingToken) {
-          try {
-            const r = await authApi.me();
-            if (isMounted) saveSession(existingToken, r.data.user);
-          } catch {
-            if (isMounted) clearSession();
-          } finally {
-            if (isMounted) setLoading(false);
-          }
-        } else {
-          if (isMounted) {
-            clearSession();
-            setLoading(false);
+            finishInitialLoad();
           }
         }
-      }
-    });
+      });
+    };
+
+    initAuth();
 
     return () => {
       isMounted = false;
-      unsubscribe();
+      clearTimeout(safetyTimer);
+      if (unsubscribe) unsubscribe();
     };
   }, []);
 
